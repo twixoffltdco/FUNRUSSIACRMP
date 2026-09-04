@@ -30,6 +30,74 @@ new const AllowedServers[][] =
 #pragma warning disable 205
 #include <a_samp>
 
+// ===== EARLY DEFINES (dialogs/market before OnDialogResponse) =====
+#if !defined DIALOG_MP_SELL_LIST
+#define DIALOG_MP_SELL_LIST   33910
+#endif
+#if !defined DIALOG_MP_SELL_PRICE
+#define DIALOG_MP_SELL_PRICE  33911
+#endif
+#if !defined DIALOG_MP_BUY_LIST
+#define DIALOG_MP_BUY_LIST    33912
+#endif
+#if !defined DIALOG_STO_MENU
+#define DIALOG_STO_MENU       33920
+#endif
+#if !defined DIALOG_SHINO_MENU
+#define DIALOG_SHINO_MENU     33921
+#endif
+#if !defined DIALOG_STYLE_MENU
+#define DIALOG_STYLE_MENU     33922
+#endif
+#if !defined MARKET_MIN_PRICE
+#define MARKET_MIN_PRICE      (100)
+#endif
+#if !defined MARKET_MAX_PRICE
+#define MARKET_MAX_PRICE      (999999999)
+#endif
+#define DIALOG_PLATE_COUNTRY 33930
+#define DIALOG_PLATE_CONFIRM 33931
+#define DIALOG_PLATE_CUSTOM 33932
+#define DIALOG_AUTORACE_REG 33940
+
+new g_daily_bonus_day[MAX_PLAYERS];
+new g_daily_bonus_streak[MAX_PLAYERS];
+#define DIALOG_CRAFT_MENU 33950
+#define DIALOG_CRAFT_CONFIRM 33951
+// ===== END EARLY DEFINES =====
+
+#if !defined MAX_CRAFT_RECIPES
+#define MAX_CRAFT_RECIPES 8
+#endif
+#if !defined _E_CRAFT_RECIPE_DEFINED
+#define _E_CRAFT_RECIPE_DEFINED
+enum E_CRAFT_RECIPE {
+    cr_name[32],
+    cr_need_item1,
+    cr_need_amt1,
+    cr_need_item2,
+    cr_need_amt2,
+    cr_result_item,
+    cr_result_model,
+    cr_result_amt,
+    cr_cost
+}
+new g_craft_recipes[MAX_CRAFT_RECIPES][E_CRAFT_RECIPE] = {
+    {"Aptechka", 1, 2, 0, 0, 15, 1, 1, 5000},
+    {"Bronik", 1, 5, 0, 0, 16, 1, 1, 15000},
+    {"Remkomplekt", 1, 3, 0, 0, 17, 1, 1, 8000},
+    {"Kanistra", 1, 2, 0, 0, 18, 1, 1, 3000},
+    {"Maska", 1, 4, 0, 0, 19, 1, 1, 10000},
+    {"Otvertka", 1, 1, 0, 0, 20, 1, 1, 2000},
+    {"Nabor instrumentov", 1, 6, 0, 0, 21, 1, 1, 25000},
+    {"Yaschik patronov", 1, 8, 0, 0, 22, 1, 1, 20000}
+};
+#endif
+
+
+new g_MarketSelectedSlot[MAX_PLAYERS];
+
+
 // Server configs use at most 200 slots; avoid allocating every per-player array for SA-MP's default 1000.
 #undef MAX_PLAYERS
 #define MAX_PLAYERS (200)
@@ -82,6 +150,28 @@ stock SafeAddNitroComponent(vehicleid, level)
 new g_server_news[MAX_NEWS_LINES][NEWS_LINE_LEN];
 new g_server_news_count = 0;
 new g_server_news_author[MAX_NEWS_LINES][MAX_PLAYER_NAME];
+
+stock News_ShowTablet(playerid)
+{
+    new list[1024];
+    list[0] = 0;
+    if(g_server_news_count <= 0)
+        format(list, sizeof list, "{AAAAAA}Novostey net");
+    else
+    {
+        for(new i = 0; i < g_server_news_count; i++)
+        {
+            new line[160];
+            format(line, sizeof line, "%d. %s: %s\n", i+1, g_server_news_author[i], g_server_news[i]);
+            if(strlen(list) + strlen(line) < sizeof(list) - 1)
+                strcat(list, line);
+        }
+    }
+    Dialog(playerid, 33960, DIALOG_STYLE_MSGBOX, "{3399FF}Novosti", list, "OK", "");
+    return 1;
+}
+
+
 
 
 
@@ -17789,6 +17879,235 @@ public OnPlayerClickTextDraw(playerid, Text:clickedid)
 public OnDialogResponse(playerid, dialogid, response, listitem, inputtext[])
 {
     new str[128];
+    // MARKET dialog sell/buy
+    
+    
+    if(dialogid == 34171)
+    {
+        if(response)
+            callcmd::paccept(playerid, "");
+        else
+            callcmd::pdeny(playerid, "");
+        return 1;
+    }
+if(dialogid == DIALOG_CRAFT_MENU)
+    {
+        if(!response) return 1;
+        if(listitem < 0 || listitem >= MAX_CRAFT_RECIPES) return 1;
+        SetPVarInt(playerid, "craft_sel", listitem);
+        new r = listitem;
+        new msg[192];
+        format(msg, sizeof(msg),
+            "{FFFFFF}Skratit: {66CC00}%s\n{FFFFFF}Cena: {FFCC00}%d rub\n\nPodtverdite kraft?",
+            g_craft_recipes[r][cr_cost], g_craft_recipes[r][cr_cost]);
+        Dialog(playerid, DIALOG_CRAFT_CONFIRM, DIALOG_STYLE_MSGBOX, "{66CC00}Kraft", msg, "Craft", "Nazad");
+        return 1;
+    }
+    if(dialogid == DIALOG_CRAFT_CONFIRM)
+    {
+        if(!response)
+        {
+            Craft_ShowMenu(playerid);
+            return 1;
+        }
+        new r = GetPVarInt(playerid, "craft_sel");
+        if(r < 0 || r >= MAX_CRAFT_RECIPES) return 1;
+        new cost = g_craft_recipes[r][cr_cost];
+        if(GetPlayerMoneyEx(playerid) < cost && GetPlayerBankMoney(playerid) < cost)
+        {
+            SendClientMessage(playerid, 0xFF0000FF, "[Craft] Nedostatochno deneg");
+            return 1;
+        }
+        if(GetPlayerMoneyEx(playerid) >= cost)
+            GivePlayerMoneyEx(playerid, -cost);
+        else
+            AddPlayerData(playerid, P_BANK, -, cost);
+
+        new slot = Inventory11_AddItemToDatabase(playerid,
+            g_craft_recipes[r][cr_result_item],
+            g_craft_recipes[r][cr_result_model],
+            g_craft_recipes[r][cr_result_amt],
+            0, 0);
+        if(slot == -1)
+        {
+            // refund
+            GivePlayerMoneyEx(playerid, cost);
+            SendClientMessage(playerid, 0xFF0000FF, "[Craft] Inventar polon — dengi vozvrascheny");
+            return 1;
+        }
+        new ok[128];
+        format(ok, sizeof(ok), "{66CC00}[Craft]{FFFFFF} Vy skrutili: #%d (slot %d)", r+1, slot);
+        SendClientMessage(playerid, -1, ok);
+        return 1;
+    }
+if(dialogid == DIALOG_MP_SELL_LIST)
+    {
+        if(!response) return 1;
+        // parse slot from list line "Slot N |"
+        new account_id = GetPlayerAccountID(playerid);
+        new query[220];
+        mysql_format(mysql, query, sizeof(query), "SELECT slot FROM inventory WHERE account_id = %d AND item_id > 0 ORDER BY slot ASC LIMIT 40", account_id);
+        new Cache:result = mysql_query(mysql, query);
+        new rows = cache_num_rows();
+        if(listitem < 0 || listitem >= rows)
+        {
+            cache_delete(result);
+            return 1;
+        }
+        new slot = cache_get_field_content_int(listitem, "slot", mysql);
+        cache_delete(result);
+        SetPVarInt(playerid, "mp_sell_slot", slot);
+        ShowPlayerDialog(playerid, DIALOG_MP_SELL_PRICE, DIALOG_STYLE_INPUT, "Market - Cena", "Vvedite cenu v rublyah (min 100):", "Prodat", "Nazad");
+        return 1;
+    }
+    if(dialogid == DIALOG_MP_SELL_PRICE)
+    {
+        if(!response)
+        {
+            Market_ShowSellDialog(playerid);
+            return 1;
+        }
+        new price = strval(inputtext);
+        if(price < MARKET_MIN_PRICE)
+        {
+            SendClientMessage(playerid, 0xFF0000FF, "Cena slishkom malaya");
+            return 1;
+        }
+        new slot = GetPVarInt(playerid, "mp_sell_slot");
+        g_MarketSelectedSlot[playerid] = slot;
+        Market_PublishSelected(playerid, price, 0);
+        return 1;
+    }
+    if(dialogid == DIALOG_MP_BUY_LIST)
+    {
+        if(!response) return 1;
+        new query[256];
+        mysql_format(mysql, query, sizeof(query), "SELECT id FROM marketplace_items WHERE status=0 AND (expires_at=0 OR expires_at>%d) ORDER BY id DESC LIMIT 30", gettime());
+        new Cache:result = mysql_query(mysql, query);
+        new rows = cache_num_rows();
+        if(listitem < 0 || listitem >= rows)
+        {
+            cache_delete(result);
+            return 1;
+        }
+        new lid = cache_get_field_content_int(listitem, "id", mysql);
+        cache_delete(result);
+        Market_BuyListing(playerid, lid);
+        return 1;
+    }
+
+    if(dialogid == DIALOG_SHINO_MENU)
+    {
+        if(!response) return 1;
+        new vid = GetPlayerVehicleID(playerid);
+        if(!vid) return 1;
+        switch(listitem)
+        {
+            case 0:
+            {
+                if(GetPlayerMoneyEx(playerid) < 5000) return SendClientMessage(playerid, 0xFF0000FF, "Nuzhno 5000");
+                GivePlayerMoneyEx(playerid, -5000);
+                RepairVehicle(vid);
+                SendClientMessage(playerid, 0x66CC00FF, "Kolesa obnovleny");
+            }
+            case 1:
+            {
+                if(GetPlayerMoneyEx(playerid) < 3000) return SendClientMessage(playerid, 0xFF0000FF, "Nuzhno 3000");
+                GivePlayerMoneyEx(playerid, -3000);
+                SendClientMessage(playerid, 0x66CC00FF, "Diski obnovleny");
+            }
+            case 2:
+            {
+                if(GetPlayerMoneyEx(playerid) < 2000) return SendClientMessage(playerid, 0xFF0000FF, "Nuzhno 2000");
+                GivePlayerMoneyEx(playerid, -2000);
+                RepairVehicle(vid);
+                SendClientMessage(playerid, 0x66CC00FF, "Kolesa otremontirovany");
+            }
+        }
+        return 1;
+    }
+    if(dialogid == DIALOG_STO_MENU)
+    {
+        if(!response) return 1;
+        new vid = GetPlayerVehicleID(playerid);
+        if(!vid) return 1;
+        new prices[4] = {10000, 15000, 8000, 7000};
+        if(listitem >= 0 && listitem <= 3)
+        {
+            if(GetPlayerMoneyEx(playerid) < prices[listitem])
+                return SendClientMessage(playerid, 0xFF0000FF, "Nedostatochno deneg");
+            GivePlayerMoneyEx(playerid, -prices[listitem]);
+            RepairVehicle(vid);
+            SetVehicleHealth(vid, 1000.0);
+            SendClientMessage(playerid, 0x66CC00FF, "STO: rabota vypolnena");
+        }
+        return 1;
+    }
+
+    
+    if(dialogid == DIALOG_AUTORACE_REG)
+    {
+        if(!response) return 1;
+        AutoRace_RegisterPlayer(playerid);
+        return 1;
+    }
+if(dialogid == DIALOG_PLATE_COUNTRY)
+    {
+        if(!response) return 1;
+        if(GetPlayerState(playerid) != PLAYER_STATE_DRIVER)
+            return SendClientMessage(playerid, 0xFF0000FF, "Tolko za rulem");
+        if(listitem == 4)
+        {
+            ShowPlayerDialog(playerid, DIALOG_PLATE_CUSTOM, DIALOG_STYLE_INPUT, "Svoy nomer", "Vvedite tekst nomera (max 8):", "OK", "Otmena");
+            return 1;
+        }
+        new country = listitem + 1;
+        new plate[16];
+        BR_RandomPlate(country, plate, sizeof(plate));
+        SetPVarString(playerid, "br_plate", plate);
+        new msg[64];
+        format(msg, sizeof(msg), "Nomer: %s\nStoimost: 5000 rub", plate);
+        ShowPlayerDialog(playerid, DIALOG_PLATE_CONFIRM, DIALOG_STYLE_MSGBOX, "Podtverdite nomer", msg, "Kupit", "Otmena");
+        return 1;
+    }
+    if(dialogid == DIALOG_PLATE_CONFIRM)
+    {
+        if(!response) return 1;
+        if(GetPlayerMoneyEx(playerid) < 5000)
+            return SendClientMessage(playerid, 0xFF0000FF, "Nujno 5000");
+        new plate[16];
+        GetPVarString(playerid, "br_plate", plate, sizeof(plate));
+        new vid = GetPlayerVehicleID(playerid);
+        if(!vid) return 1;
+        GivePlayerMoneyEx(playerid, -5000);
+        SetVehicleNumberPlate(vid, plate);
+        SetVehicleToRespawn(vid); // refresh plate visual on some clients
+        PutPlayerInVehicle(playerid, vid, 0);
+        new msg[64];
+        format(msg, sizeof(msg), "Ustanovlen nomer: %s", plate);
+        SendClientMessage(playerid, 0x66CC00FF, msg);
+        return 1;
+    }
+    if(dialogid == DIALOG_PLATE_CUSTOM)
+    {
+        if(!response) return 1;
+        if(strlen(inputtext) < 1 || strlen(inputtext) > 8)
+            return SendClientMessage(playerid, 0xFF0000FF, "1-8 simvolov");
+        if(GetPlayerMoneyEx(playerid) < 15000)
+            return SendClientMessage(playerid, 0xFF0000FF, "Svoy nomer: 15000 rub");
+        new vid = GetPlayerVehicleID(playerid);
+        if(!vid) return 1;
+        GivePlayerMoneyEx(playerid, -15000);
+        SetVehicleNumberPlate(vid, inputtext);
+        SetVehicleToRespawn(vid);
+        PutPlayerInVehicle(playerid, vid, 0);
+        SendClientMessage(playerid, 0x66CC00FF, "Svoy nomer ustanovlen");
+        return 1;
+    }
+
+
+
+
     // PATCH music dialog
     // MARKETPLACE dialogs
     
@@ -17800,7 +18119,7 @@ public OnDialogResponse(playerid, dialogid, response, listitem, inputtext[])
         if(strlen(inputtext) < 3)
             return SendClientMessage(playerid, 0xFF0000FF, "Слишком коротко");
         new fmsg[200];
-        format(fmsg, sizeof fmsg, "[FORMA] %s[%d]: %s", GetPlayerNameEx(playerid), playerid, inputtext);
+        format(fmsg, sizeof(fmsg), "[FORMA] %s[%d]: %s", GetPlayerNameEx(playerid), playerid, inputtext);
         SendMessageToAdmins(fmsg, 0xFF6600FF);
         SendClientMessage(playerid, 0x66CC00FF, "Заявка отправлена администрации");
         return 1;
@@ -17859,25 +18178,15 @@ public OnDialogResponse(playerid, dialogid, response, listitem, inputtext[])
         }
         if(url[0])
         {
-            StopAudioStream(playerid);
-            PlayAudioStreamURL(playerid, url);
+            StopAudioStreamForPlayer(playerid);
+            PlayAudioStreamForPlayer(playerid, url);
             SetPVarInt(playerid, "music_playing", 1);
             SendClientMessage(playerid, 0x66CC00FF, "Музыка включена");
         }
         return 1;
     }
 
-            }
-        if(url[0])
-        {
-            PlayAudioStreamForPlayer(playerid, url);
-            PlayAudioStreamURL(playerid, url);
-            SetPVarInt(playerid, "music_playing", 1);
-            SendClientMessage(playerid, 0x00FF00FF, "[Music] Playing...");
-        }
-        return 1;
-    }
-if(dialogid == 32800)
+    if(dialogid == 32800)
     {
         if(!response) return 1;
         switch(listitem)
@@ -28173,40 +28482,1966 @@ stock Market_FormatLotLine(lotid, dest[], size = sizeof dest)
     return 1;
 }
 
-stock ShowMarketplaceGui(playerid)
+
+// ===== LONEXS-STYLE MARKETPLACE ADAPTED FOR KRANIN =====
+#if defined _KRANIN_MARKET_FULL
+#else
+#define _KRANIN_MARKET_FULL
+
+
+#define DIALOG_MP_SELL_LIST  33910
+#define DIALOG_MP_SELL_PRICE 33911
+#define DIALOG_MP_BUY_LIST   33912
+
+// v0.3 STO / Shinomontazh / Styling enter points
+new Float:g_TuningEnter[3][4] = {
+    {2313.691406, -2607.333496, 20.944360, 102.975852},
+    {2313.824707, -2612.991455, 20.939689, 102.975852},
+    {2313.662109, -2619.332763, 20.944149, 102.975852}
+};
+new Float:g_TuningEnter2[3][4] = {
+    {1732.037353, 2452.861328, 14.979245},
+    {1732.035766, 2457.393798, 14.979245},
+    {1732.037353, 2462.861328, 14.979245}
+};
+new Float:g_TuningEnter3[3][4] = {
+    {2164.40302, -870.218139, 28.59245},
+    {2164.40302, -865.327270, 28.59245},
+    {2164.40302, -860.289064, 27.29245}
+};
+new Float:g_TuningEnter4[3][4] = {
+    {-426.235290, 1005.412658, 12.307508},
+    {-420.054534, 1005.409240, 12.307003},
+    {-413.549285, 1005.543029, 12.326748}
+};
+#define DIALOG_STO_MENU   33920
+#define DIALOG_SHINO_MENU 33921
+#define DIALOG_STYLE_MENU 33922
+#define MARKET_GUI_ID               (77)
+#define MARKET_PAGE_SIZE            (8)
+#define MARKET_MIN_PRICE            (100)
+#define MARKET_MAX_PRICE            (999999999)
+#define MARKET_LISTING_LIFETIME     (604800)
+#define MARKET_TAB_PROFILE          (1)
+#define MARKET_TAB_MAIN             (2)
+#define MARKET_TAB_HISTORY          (3)
+#define MARKET_TAB_FAVORITES        (4)
+#define MARKET_TAB_MY_STORE         (5)
+#define MARKET_TAB_INVENTORY        (6)
+#define MARKET_ACTIVE_SLOT_BASE      (1000)
+#define MARKET_ACTIVE_SLOTS          (2)
+#define MARKET_TYPE_MATERIAL        (1)
+#define MARKET_TYPE_ACCESSORY       (2)
+#define MARKET_TYPE_SKIN            (3)
+#define MARKET_TYPE_OTHER           MARKET_TYPE_MATERIAL
+#define MARKET_HISTORY_BUY          (1)
+#define MARKET_HISTORY_SELL         (2)
+#define MARKET_NOTIFICATION_HOT     (1)
+#define MARKET_NOTIFICATION_NONE    (0)
+#define MARKET_VIP_PRICE            (2000000)
+#define MARKET_VIP_DAYS             (30)
+#define MARKET_VIP_TYPE             (3)
+#define MARKET_TEST_SKIN_LISTING_ID (77000002)
+#define MARKET_TEST_SKIN_MODEL      (89)
+#define MARKET_TEST_SKIN_PRICE      (10000000)
+
+// g_MarketSelectedSlot declared early
+new g_MarketSelectedListing[MAX_PLAYERS];
+new g_MarketCurrentTab[MAX_PLAYERS];
+new g_MarketCurrentPage[MAX_PLAYERS];
+new g_MarketSort[MAX_PLAYERS];
+new g_MarketSearch[MAX_PLAYERS][32];
+new bool:g_MarketOpenPacket[MAX_PLAYERS];
+
+stock Marketplace_Init()
 {
-    new Node:root = JSON_Object();
-    JSON_SetInt(root, "t", 0);
-    JSON_SetInt(root, "p", 0);
-    JSON_SetInt(root, "b", 0);
-    JSON_SetInt(root, "a", 0);
-    JSON_SetString(root, "n", "Marketplace");
-    JSON_SetString(root, "title", "Marketplace");
-    JSON_SetInt(root, "m", GetPlayerMoneyEx(playerid));
-    JSON_SetInt(root, "bank", GetPlayerBankMoney(playerid));
-    JSON_SetInt(root, "c", Market_CountLots());
-    JSON_SetInt(root, "max", MAX_MARKET_LOTS);
-    JSON_SetInt(root, "lc", Market_CountLots());
-    JSON_SetInt(root, "ic", 0);
-    JSON_SetInt(root, "shown", Market_CountLots());
-    ShowPlayerGUI(playerid, MarketplaceGuiFragment, root);
-    JSON_Cleanup(root);
+    // SYNC create - tquery may finish after first sell
+    mysql_query(mysql, "CREATE TABLE IF NOT EXISTS `marketplace_items` (`id` INT NOT NULL AUTO_INCREMENT PRIMARY KEY, `seller_id` INT NOT NULL, `seller_name` VARCHAR(24) NOT NULL DEFAULT '', `item_id` INT NOT NULL, `item_count` INT NOT NULL DEFAULT 1, `item_name` VARCHAR(64) NOT NULL DEFAULT '', `price` INT NOT NULL, `is_hot` TINYINT(1) NOT NULL DEFAULT 0, `status` TINYINT(1) NOT NULL DEFAULT 0, `buyer_id` INT NOT NULL DEFAULT 0, `buyer_name` VARCHAR(24) NOT NULL DEFAULT '', `created_at` INT NOT NULL DEFAULT 0, `expires_at` INT NOT NULL DEFAULT 0, `sold_at` INT NOT NULL DEFAULT 0) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4", false);
+    if(mysql_errno(mysql) != 0)
+        printf("[MARKET] CREATE marketplace_items errno=%d", mysql_errno(mysql));
+    else
+        printf("[MARKET] marketplace_items OK");
+
+    mysql_query(mysql, "CREATE TABLE IF NOT EXISTS `marketplace_likes` (`player_id` INT NOT NULL, `listing_id` INT NOT NULL, `created_at` INT NOT NULL DEFAULT 0, PRIMARY KEY (`player_id`, `listing_id`)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4", false);
+    if(mysql_errno(mysql) != 0)
+        printf("[MARKET] CREATE marketplace_likes errno=%d", mysql_errno(mysql));
     return 1;
 }
 
-stock Market_RefreshGui(playerid)
+
+stock Market_ResetPlayer(playerid)
 {
-    new Node:root = JSON_Object();
-    JSON_SetInt(root, "t", 1);
-    JSON_SetInt(root, "m", GetPlayerMoneyEx(playerid));
-    JSON_SetInt(root, "bank", GetPlayerBankMoney(playerid));
-    JSON_SetInt(root, "c", Market_CountLots());
-    JSON_SetInt(root, "lc", Market_CountLots());
-    JSON_SetInt(root, "shown", Market_CountLots());
-    UpdatePlayerGUI(playerid, MarketplaceGuiFragment, root);
-    JSON_Cleanup(root);
+    g_MarketSelectedSlot[playerid] = -1;
+    g_MarketSelectedListing[playerid] = -1;
+    g_MarketCurrentTab[playerid] = MARKET_TAB_MAIN;
+    g_MarketCurrentPage[playerid] = 1;
+    g_MarketSort[playerid] = 0;
+    g_MarketSearch[playerid][0] = EOS;
     return 1;
 }
+
+stock bool:Market_Inv11_GetSlotData(playerid, slot, &item_id, &model_id, &amount, &extra_1)
+{
+    item_id = 0;
+    model_id = 0;
+    amount = 0;
+    extra_1 = 0;
+
+    new account_id = GetPlayerAccountID(playerid);
+    if(account_id <= 0) return false;
+
+    new query[196];
+    mysql_format(mysql, query, sizeof(query), "SELECT item_id, model_id, amount, extra_1, old_skin FROM inventory WHERE account_id = %d AND slot = %d LIMIT 1", account_id, slot);
+    new Cache:result = mysql_query(mysql, query);
+
+    if(cache_num_rows() <= 0)
+    {
+        cache_delete(result);
+        return false;
+    }
+
+    item_id = cache_get_field_content_int(0, "item_id", mysql);
+    amount = cache_get_field_content_int(0, "amount", mysql);
+    extra_1 = cache_get_field_content_int(0, "extra_1", mysql);
+
+    new old_skin = cache_get_field_content_int(0, "old_skin", mysql);
+    new raw_model = cache_get_field_content_int(0, "model_id", mysql);
+    model_id = (item_id == 134 && old_skin > 0) ? old_skin : raw_model;
+
+    cache_delete(result);
+    return true;
+}
+
+stock bool:Market_Inv11_HasFreeSlot(playerid)
+{
+    new account_id = GetPlayerAccountID(playerid);
+    if(account_id <= 0) return false;
+
+    new max_slots = Inventory11_GetMaxSlots(playerid);
+    new query[160];
+    mysql_format(mysql, query, sizeof(query), "SELECT COUNT(*) AS `cnt` FROM inventory WHERE account_id = %d AND slot BETWEEN 1 AND %d", account_id, max_slots);
+    new Cache:result = mysql_query(mysql, query);
+
+    new used = 0;
+    if(cache_num_rows() > 0) used = cache_get_field_content_int(0, "cnt", mysql);
+    cache_delete(result);
+
+    return (used < max_slots);
+}
+
+stock Market_Inv11_FindSkinSlotByModel(playerid, modelid)
+{
+    new account_id = GetPlayerAccountID(playerid);
+    if(account_id <= 0) return -1;
+
+    new query[196];
+    mysql_format(mysql, query, sizeof(query), "SELECT slot FROM inventory WHERE account_id = %d AND item_id = 134 AND (model_id = %d OR old_skin = %d) ORDER BY slot ASC LIMIT 1", account_id, modelid, modelid);
+    new Cache:result = mysql_query(mysql, query);
+
+    new slot = -1;
+    if(cache_num_rows() > 0) slot = cache_get_field_content_int(0, "slot", mysql);
+    cache_delete(result);
+
+    return slot;
+}
+
+stock bool:Market_GetAccessoryNameByModel(modelid, name[], len)
+{
+    if(modelid <= 0) return false;
+
+    for(new i = 0; i < sizeof(accessory); i++)
+    {
+        if(accessory[i][ID_ACCESSORY] == modelid)
+        {
+            format(name, len, "%s", accessory[i][NAME_ACCESSORY]);
+            return true;
+        }
+    }
+    return false;
+}
+
+stock Market_GetAccessoryIdByItem(itemid)
+{
+    return Inv11_GetAccModelByItem(itemid);
+}
+
+stock bool:Market_IsAccessoryItem(itemid)
+{
+    if(itemid <= 0) return false;
+    return Inventory11_IsAccessoryItem(itemid);
+}
+
+stock bool:Market_IsSellableItem(itemid)
+{
+    // Production: any real inventory item can be listed
+    if(itemid <= 0) return false;
+    if(itemid == 134) return true;
+    if(Market_IsAccessoryItem(itemid)) return true;
+    // weapons, materials, consumables, skins, etc.
+    return true;
+}
+
+stock Market_GetProductType(itemid)
+{
+    if(itemid == 134) return MARKET_TYPE_SKIN;
+    if(Market_IsAccessoryItem(itemid)) return MARKET_TYPE_ACCESSORY;
+    return MARKET_TYPE_MATERIAL;
+}
+
+stock bool:Market_IsActiveSource(sourceId)
+{
+    return (sourceId >= MARKET_ACTIVE_SLOT_BASE + 1 && sourceId <= MARKET_ACTIVE_SLOT_BASE + MARKET_ACTIVE_SLOTS);
+}
+
+stock Market_SourceToActiveSlot(sourceId)
+{
+    return sourceId - MARKET_ACTIVE_SLOT_BASE;
+}
+
+stock bool:Market_GetSourceItem(playerid, sourceId, &itemid, &itemCount)
+{
+    if(Market_IsActiveSource(sourceId))
+    {
+        new activeSlot = Market_SourceToActiveSlot(sourceId);
+        if(activeSlot < 1 || activeSlot > MARKET_ACTIVE_SLOTS) return false;
+
+        new item_1, model_1, item_2, model_2;
+        Inventory11_GetActiveAccessories(playerid, item_1, model_1, item_2, model_2);
+
+        itemid = (activeSlot == 1) ? item_1 : item_2;
+        itemCount = 1;
+
+        if(itemid <= 0) return false;
+        return Market_IsSellableItem(itemid);
+    }
+
+    if(sourceId < 1 || sourceId > Inventory11_GetMaxSlots(playerid)) return false;
+
+    new item_id, model_id, amount, extra_1;
+    if(!Market_Inv11_GetSlotData(playerid, sourceId, item_id, model_id, amount, extra_1)) return false;
+
+    if(item_id == 134)
+    {
+        itemid = 134;
+        itemCount = model_id;
+        return true;
+    }
+
+    if(Inventory11_IsAccessoryItem(item_id))
+    {
+        itemid = item_id;
+        itemCount = 1;
+        return true;
+    }
+
+    return false;
+}
+
+stock bool:Market_RemoveSourceItem(playerid, sourceId)
+{
+    // Normal inventory slots (1..N)
+    if(sourceId >= 1 && sourceId < MARKET_ACTIVE_SLOT_BASE)
+    {
+        return Inventory11_DeleteSlotFromDatabase(playerid, sourceId) != 0;
+    }
+
+    // Equipped accessory active slots
+    if(Market_IsActiveSource(sourceId))
+    {
+        new activeSlot = Market_SourceToActiveSlot(sourceId);
+        if(activeSlot < 1 || activeSlot > MARKET_ACTIVE_SLOTS) return false;
+
+        new item_1, model_1, item_2, model_2;
+        Inventory11_GetActiveAccessories(playerid, item_1, model_1, item_2, model_2);
+
+        new itemid = (activeSlot == 1) ? item_1 : item_2;
+        if(itemid <= 0) return false;
+
+        // clear active accessory in DB if supported
+        if(Inventory11_DeleteSlotFromDatabase(playerid, activeSlot))
+            return true;
+        return true;
+    }
+    return false;
+}
+
+
+stock Market_GetRarity(itemid, price)
+{
+    if(itemid == 134) return 3;
+    if(price >= 10000000) return 5;
+    if(price >= 5000000) return 4;
+    if(price >= 1000000) return 3;
+    if(price >= 300000) return 2;
+    return 1;
+}
+
+stock Market_GetItemNameByData(itemid, count, name[], len)
+{
+    if(itemid == 134)
+    {
+        format(name, len, "пїЅпїЅпїЅпїЅ #%d", count);
+        return 1;
+    }
+
+    if(Market_IsAccessoryItem(itemid))
+    {
+        new modelid = Inv11_GetAccModelByItem(itemid);
+        if(Market_GetAccessoryNameByModel(modelid, name, len)) return 1;
+
+        format(name, len, "пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ #%d", itemid);
+        return 1;
+    }
+
+    format(name, len, "пїЅпїЅпїЅпїЅпїЅпїЅпїЅ #%d", itemid);
+    return 1;
+}
+
+stock Market_GetItemNameFromSlot(playerid, slot, name[], len)
+{
+    new itemid, itemCount;
+    if(!Market_GetSourceItem(playerid, slot, itemid, itemCount)) return 0;
+    return Market_GetItemNameByData(itemid, itemCount, name, len);
+}
+
+stock Market_FindOnlineBySqlId(sqlid)
+{
+    for(new i = 0; i < MAX_PLAYERS; i++)
+    {
+        if(IsPlayerConnected(i) && GetPlayerAccountID(i) == sqlid) return i;
+    }
+    return INVALID_PLAYER_ID;
+}
+
+stock Market_GetActiveLotsCount(playerid)
+{
+    new query[160];
+    mysql_format(mysql, query, sizeof(query), "SELECT COUNT(*) AS `cnt` FROM `marketplace_items` WHERE `seller_id`=%d AND `status`=0 AND (`expires_at`=0 OR `expires_at`>%d)", GetPlayerAccountID(playerid), gettime());
+    new Cache:result = mysql_query(mysql, query);
+    new count = 0;
+    if(cache_num_rows() > 0) count = cache_get_field_content_int(0, "cnt", mysql);
+    cache_delete(result);
+    return count;
+}
+
+stock Market_GetSoldLotsCount(playerid)
+{
+    new query[160];
+    mysql_format(mysql, query, sizeof(query), "SELECT COUNT(*) AS `cnt` FROM `marketplace_items` WHERE `seller_id`=%d AND `status`=1", GetPlayerAccountID(playerid));
+    new Cache:result = mysql_query(mysql, query);
+    new count = 0;
+    if(cache_num_rows() > 0) count = cache_get_field_content_int(0, "cnt", mysql);
+    cache_delete(result);
+    return count;
+}
+
+stock Market_GetAllRevenue(playerid)
+{
+    new query[160];
+    mysql_format(mysql, query, sizeof(query), "SELECT SUM(`price`) AS `summa` FROM `marketplace_items` WHERE `seller_id`=%d AND `status`=1", GetPlayerAccountID(playerid));
+    new Cache:result = mysql_query(mysql, query);
+    new money = 0;
+    if(cache_num_rows() > 0) money = cache_get_field_content_int(0, "summa", mysql);
+    cache_delete(result);
+    return money;
+}
+
+stock Market_SendRaw(playerid, Node:json)
+{
+    if(g_MarketOpenPacket[playerid])
+    {
+        g_MarketOpenPacket[playerid] = false;
+        JSON_SetInt(json, "o", 1);
+        ShowPlayerGUI(playerid, MARKET_GUI_ID, json);
+    }
+    else
+    {
+        OnPacketIncoming(playerid, MARKET_GUI_ID, json);
+    }
+
+    JSON_Cleanup(json);
+    return 1;
+}
+
+
+stock Market_GetVipTypeForGui(playerid)
+{
+    new vip = GetPlayerPremium(playerid);
+    if(vip < 0) vip = 0;
+    if(vip > MARKET_VIP_TYPE) vip = MARKET_VIP_TYPE;
+    return vip;
+}
+
+stock Market_SendError(playerid, responseType, const text[])
+{
+    new Node:json = JSON_Object();
+    new msg[256];
+    format(msg, sizeof(msg), "%s", text);
+    JSON_SetInt(json, "t", responseType);
+    JSON_SetInt(json, "err", 0);
+    JSON_SetString(json, "dm", msg);
+    Market_SendRaw(playerid, json);
+    ShowNotificationNew(playerid, 0, 5, 0, 0, msg, "");
+    return 1;
+}
+
+
+stock Market_SetCommonPacketInfo(playerid, Node:json, page, pages)
+{
+    JSON_SetInt(json, "m", GetPlayerMoneyEx(playerid));
+    JSON_SetInt(json, "ls", pages);
+    JSON_SetInt(json, "lt", page);
+    JSON_SetInt(json, "v", Market_GetVipTypeForGui(playerid));
+    JSON_SetInt(json, "vm", MARKET_VIP_PRICE);
+    JSON_SetInt(json, "lp", Market_GetActiveLotsCount(playerid));
+    JSON_SetInt(json, "lh", Market_GetSoldLotsCount(playerid));
+    return 1;
+}
+
+stock Market_FillTestSkinNode(Node:obj)
+{
+    JSON_SetInt(obj, "id", MARKET_TEST_SKIN_LISTING_ID);
+    JSON_SetInt(obj, "tp", MARKET_NOTIFICATION_HOT);
+    JSON_SetInt(obj, "md", 134);
+    JSON_SetInt(obj, "ct", MARKET_TEST_SKIN_MODEL);
+    JSON_SetInt(obj, "cs", MARKET_TEST_SKIN_PRICE);
+    JSON_SetInt(obj, "tm", gettime());
+    JSON_SetInt(obj, "ti", MARKET_LISTING_LIFETIME);
+    JSON_SetInt(obj, "rt", 5);
+    JSON_SetInt(obj, "r", 5);
+    JSON_SetInt(obj, "pt", MARKET_TYPE_SKIN);
+    JSON_SetInt(obj, "l", 0);
+    JSON_SetString(obj, "dm", "пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅ #89");
+    JSON_SetString(obj, "nm", "Market");
+    JSON_SetString(obj, "sl", "Market");
+    JSON_SetInt(obj, "sid", 0);
+    return 1;
+}
+
+stock Node:Market_AppendTestSkinNode(Node:array)
+{
+    new Node:item = JSON_Object();
+    Market_FillTestSkinNode(item);
+    return JSON_Append(array, item);
+}
+
+stock Market_InsertListing(playerid, itemid, itemCount, price, hot, itemName[])
+{
+    new query[640];
+    new now = gettime();
+    new days = 3;
+    new prem = GetPlayerPremium(playerid);
+    if(prem >= 3) days = 14;
+    else if(prem == 2) days = 10;
+    else if(prem == 1) days = 7;
+    new expires = now + days * 86400;
+
+    // escape-safe via mysql_format %e
+    mysql_format(mysql, query, sizeof(query),
+        "INSERT INTO `marketplace_items` (`seller_id`,`seller_name`,`item_id`,`item_count`,`item_name`,`price`,`is_hot`,`status`,`created_at`,`expires_at`) VALUES (%d, '%e', %d, %d, '%e', %d, %d, 0, %d, %d)",
+        GetPlayerAccountID(playerid), GetPlayerNameEx(playerid), itemid, itemCount, itemName, price, hot ? 1 : 0, now, expires);
+
+    mysql_query(mysql, query, false);
+    new errno = mysql_errno(mysql);
+    if(errno != 0)
+    {
+        printf("[MARKET] INSERT fail errno=%d query=%s", errno, query);
+        // try create table again then re-insert
+        SetTimer("AutoRace_MinuteCheck", 60000, true);
+	Marketplace_Init();
+        mysql_query(mysql, query, false);
+        errno = mysql_errno(mysql);
+        if(errno != 0)
+        {
+            printf("[MARKET] INSERT retry fail errno=%d", errno);
+            return 0;
+        }
+    }
+
+    new listingId = cache_insert_id();
+    if(listingId <= 0) listingId = cache_insert_id(mysql);
+    printf("[MARKET] INSERT ok id=%d item=%d price=%d", listingId, itemid, price);
+    return listingId;
+}
+
+
+stock bool:Market_ResolveCommandSource(playerid, &sourceId)
+{
+    new itemid, itemCount;
+
+    if(Market_GetSourceItem(playerid, sourceId, itemid, itemCount)) return true;
+
+    if(Inventory11_IsAccessoryItem(sourceId))
+    {
+        new slot = Inventory11_FindFirstItemSlotById(playerid, sourceId);
+        if(slot > 0)
+        {
+            sourceId = slot;
+            return true;
+        }
+
+        new item_1, model_1, item_2, model_2;
+        Inventory11_GetActiveAccessories(playerid, item_1, model_1, item_2, model_2);
+        if(item_1 == sourceId)
+        {
+            sourceId = MARKET_ACTIVE_SLOT_BASE + 1;
+            return true;
+        }
+        if(item_2 == sourceId)
+        {
+            sourceId = MARKET_ACTIVE_SLOT_BASE + 2;
+            return true;
+        }
+        return false;
+    }
+
+    new skinSlot = Market_Inv11_FindSkinSlotByModel(playerid, sourceId);
+    if(skinSlot > 0)
+    {
+        sourceId = skinSlot;
+        return true;
+    }
+
+    return false;
+}
+
+
+stock Market_FillProductNodeFromCache(Node:obj, row, historyMode, playerid)
+{
+    new listingId = cache_get_field_content_int(row, "id", mysql);
+    new itemid = cache_get_field_content_int(row, "item_id", mysql);
+    new itemCount = cache_get_field_content_int(row, "item_count", mysql);
+    new price = cache_get_field_content_int(row, "price", mysql);
+    new isHot = cache_get_field_content_int(row, "is_hot", mysql);
+    new sellerId = cache_get_field_content_int(row, "seller_id", mysql);
+    new buyerId = cache_get_field_content_int(row, "buyer_id", mysql);
+    new expiresAt = cache_get_field_content_int(row, "expires_at", mysql);
+    new createdAt = cache_get_field_content_int(row, "created_at", mysql);
+    new soldAt = cache_get_field_content_int(row, "sold_at", mysql);
+    new sellerName[MAX_PLAYER_NAME], itemName[64];
+
+    cache_get_field_content(row, "seller_name", sellerName, mysql, sizeof(sellerName));
+    cache_get_field_content(row, "item_name", itemName, mysql, sizeof(itemName));
+
+    if(itemName[0] == EOS) Market_GetItemNameByData(itemid, itemCount, itemName, sizeof(itemName));
+
+    new timeLeft = expiresAt ? (expiresAt - gettime()) : MARKET_LISTING_LIFETIME;
+    if(timeLeft < 0) timeLeft = 0;
+
+    new cardType = isHot ? MARKET_NOTIFICATION_HOT : MARKET_NOTIFICATION_NONE;
+    if(historyMode)
+    {
+        if(buyerId == GetPlayerAccountID(playerid)) cardType = MARKET_HISTORY_BUY;
+        else cardType = MARKET_HISTORY_SELL;
+    }
+
+    JSON_SetInt(obj, "id", listingId);
+    JSON_SetInt(obj, "tp", cardType);
+    JSON_SetInt(obj, "md", itemid);
+    JSON_SetInt(obj, "ct", itemCount);
+    JSON_SetInt(obj, "cs", price);
+    JSON_SetInt(obj, "tm", historyMode ? soldAt : createdAt);
+    JSON_SetInt(obj, "ti", timeLeft);
+    JSON_SetInt(obj, "rt", Market_GetRarity(itemid, price));
+    JSON_SetInt(obj, "r", Market_GetRarity(itemid, price));
+    JSON_SetInt(obj, "pt", Market_GetProductType(itemid));
+    JSON_SetInt(obj, "l", 0);
+    JSON_SetString(obj, "dm", itemName);
+    JSON_SetString(obj, "nm", sellerName);
+    JSON_SetString(obj, "sl", sellerName);
+    JSON_SetInt(obj, "sid", sellerId);
+    return 1;
+}
+
+stock Market_AddLikeFlag(playerid, Node:obj, listingId)
+{
+    new query[128];
+    mysql_format(mysql, query, sizeof(query), "SELECT `listing_id` FROM `marketplace_likes` WHERE `player_id`=%d AND `listing_id`=%d LIMIT 1", GetPlayerAccountID(playerid), listingId);
+    new Cache:result = mysql_query(mysql, query);
+    JSON_SetInt(obj, "l", cache_num_rows() > 0 ? 1 : 0);
+    cache_delete(result);
+    return 1;
+}
+
+stock Market_SendProductsList(playerid, responseType, page, mode)
+{
+    if(page < 1) page = 1;
+    g_MarketCurrentTab[playerid] = mode;
+    new query[768], countQuery[512], order[72], search[32];
+    format(search, sizeof(search), "%s", g_MarketSearch[playerid]);
+
+    switch(g_MarketSort[playerid])
+    {
+        case 1: format(order, sizeof(order), "`price` ASC, `created_at` DESC");
+        case 2: format(order, sizeof(order), "`price` DESC, `created_at` DESC");
+        case 3: format(order, sizeof(order), "`created_at` ASC");
+        default: format(order, sizeof(order), "`is_hot` DESC, `created_at` DESC");
+    }
+
+    new now = gettime();
+
+    if(mode == MARKET_TAB_MAIN)
+    {
+        if(search[0]) mysql_format(mysql, countQuery, sizeof(countQuery), "SELECT COUNT(*) AS `cnt` FROM `marketplace_items` WHERE `status`=0 AND (`expires_at`=0 OR `expires_at`>%d) AND (`item_name` LIKE '%%%e%%' OR `seller_name` LIKE '%%%e%%')", now, search, search);
+        else mysql_format(mysql, countQuery, sizeof(countQuery), "SELECT COUNT(*) AS `cnt` FROM `marketplace_items` WHERE `status`=0 AND (`expires_at`=0 OR `expires_at`>%d)", now);
+    }
+    else if(mode == MARKET_TAB_MY_STORE)
+    {
+        if(search[0]) mysql_format(mysql, countQuery, sizeof(countQuery), "SELECT COUNT(*) AS `cnt` FROM `marketplace_items` WHERE `status`=0 AND `seller_id`=%d AND (`expires_at`=0 OR `expires_at`>%d) AND `item_name` LIKE '%%%e%%'", GetPlayerAccountID(playerid), now, search);
+        else mysql_format(mysql, countQuery, sizeof(countQuery), "SELECT COUNT(*) AS `cnt` FROM `marketplace_items` WHERE `status`=0 AND `seller_id`=%d AND (`expires_at`=0 OR `expires_at`>%d)", GetPlayerAccountID(playerid), now);
+    }
+    else if(mode == MARKET_TAB_FAVORITES)
+    {
+        if(search[0]) mysql_format(mysql, countQuery, sizeof(countQuery), "SELECT COUNT(*) AS `cnt` FROM `marketplace_items` m INNER JOIN `marketplace_likes` l ON l.`listing_id`=m.`id` WHERE l.`player_id`=%d AND m.`status`=0 AND (m.`expires_at`=0 OR m.`expires_at`>%d) AND (m.`item_name` LIKE '%%%e%%' OR m.`seller_name` LIKE '%%%e%%')", GetPlayerAccountID(playerid), now, search, search);
+        else mysql_format(mysql, countQuery, sizeof(countQuery), "SELECT COUNT(*) AS `cnt` FROM `marketplace_items` m INNER JOIN `marketplace_likes` l ON l.`listing_id`=m.`id` WHERE l.`player_id`=%d AND m.`status`=0 AND (m.`expires_at`=0 OR m.`expires_at`>%d)", GetPlayerAccountID(playerid), now);
+    }
+    else
+    {
+        mysql_format(mysql, countQuery, sizeof(countQuery), "SELECT COUNT(*) AS `cnt` FROM `marketplace_items` WHERE (`seller_id`=%d OR `buyer_id`=%d) AND `status`=1", GetPlayerAccountID(playerid), GetPlayerAccountID(playerid));
+    }
+
+    new Cache:countResult = mysql_query(mysql, countQuery);
+    new total = 0;
+    if(cache_num_rows() > 0) total = cache_get_field_content_int(0, "cnt", mysql);
+    cache_delete(countResult);
+
+    new virtualCount = 0;
+    if(mode == MARKET_TAB_MAIN && !search[0]) virtualCount = 1;
+    total += virtualCount;
+
+    new pages = (total + MARKET_PAGE_SIZE - 1) / MARKET_PAGE_SIZE;
+    if(pages < 1) pages = 1;
+    if(page > pages) page = pages;
+    g_MarketCurrentPage[playerid] = page;
+
+    new offset = (page - 1) * MARKET_PAGE_SIZE;
+    new dbLimit = MARKET_PAGE_SIZE;
+    new addTestSkin = 0;
+
+    if(mode == MARKET_TAB_MAIN && !search[0])
+    {
+        if(page == 1)
+        {
+            addTestSkin = 1;
+            dbLimit = MARKET_PAGE_SIZE - 1;
+        }
+        else
+        {
+            offset -= 1;
+            if(offset < 0) offset = 0;
+        }
+    }
+
+    if(mode == MARKET_TAB_MAIN)
+    {
+        if(search[0]) mysql_format(mysql, query, sizeof(query), "SELECT * FROM `marketplace_items` WHERE `status`=0 AND (`expires_at`=0 OR `expires_at`>%d) AND (`item_name` LIKE '%%%e%%' OR `seller_name` LIKE '%%%e%%') ORDER BY %s LIMIT %d,%d", now, search, search, order, offset, dbLimit);
+        else mysql_format(mysql, query, sizeof(query), "SELECT * FROM `marketplace_items` WHERE `status`=0 AND (`expires_at`=0 OR `expires_at`>%d) ORDER BY %s LIMIT %d,%d", now, order, offset, dbLimit);
+    }
+    else if(mode == MARKET_TAB_MY_STORE)
+    {
+        if(search[0]) mysql_format(mysql, query, sizeof(query), "SELECT * FROM `marketplace_items` WHERE `status`=0 AND `seller_id`=%d AND (`expires_at`=0 OR `expires_at`>%d) AND `item_name` LIKE '%%%e%%' ORDER BY %s LIMIT %d,%d", GetPlayerAccountID(playerid), now, search, order, offset, dbLimit);
+        else mysql_format(mysql, query, sizeof(query), "SELECT * FROM `marketplace_items` WHERE `status`=0 AND `seller_id`=%d AND (`expires_at`=0 OR `expires_at`>%d) ORDER BY %s LIMIT %d,%d", GetPlayerAccountID(playerid), now, order, offset, dbLimit);
+    }
+    else if(mode == MARKET_TAB_FAVORITES)
+    {
+        if(search[0]) mysql_format(mysql, query, sizeof(query), "SELECT m.* FROM `marketplace_items` m INNER JOIN `marketplace_likes` l ON l.`listing_id`=m.`id` WHERE l.`player_id`=%d AND m.`status`=0 AND (m.`expires_at`=0 OR m.`expires_at`>%d) AND (m.`item_name` LIKE '%%%e%%' OR m.`seller_name` LIKE '%%%e%%') ORDER BY %s LIMIT %d,%d", GetPlayerAccountID(playerid), now, search, search, order, offset, dbLimit);
+        else mysql_format(mysql, query, sizeof(query), "SELECT m.* FROM `marketplace_items` m INNER JOIN `marketplace_likes` l ON l.`listing_id`=m.`id` WHERE l.`player_id`=%d AND m.`status`=0 AND (m.`expires_at`=0 OR m.`expires_at`>%d) ORDER BY %s LIMIT %d,%d", GetPlayerAccountID(playerid), now, order, offset, dbLimit);
+    }
+    else
+    {
+        mysql_format(mysql, query, sizeof(query), "SELECT * FROM `marketplace_items` WHERE (`seller_id`=%d OR `buyer_id`=%d) AND `status`=1 ORDER BY `sold_at` DESC LIMIT %d,%d", GetPlayerAccountID(playerid), GetPlayerAccountID(playerid), offset, dbLimit);
+    }
+
+    new Node:json = JSON_Object();
+    new Node:array = JSON_Array();
+    if(addTestSkin) array = Market_AppendTestSkinNode(array);
+    new Cache:result = mysql_query(mysql, query);
+    for(new i = 0; i < cache_num_rows(); i++)
+    {
+        new Node:item = JSON_Object();
+        Market_FillProductNodeFromCache(item, i, mode == MARKET_TAB_HISTORY, playerid);
+        Market_AddLikeFlag(playerid, item, cache_get_field_content_int(i, "id", mysql));
+        array = JSON_Append(array, item);
+    }
+    cache_delete(result);
+
+    JSON_SetInt(json, "t", responseType);
+    Market_SetCommonPacketInfo(playerid, json, page, pages);
+    JSON_SetInt(json, "tm", (mode == MARKET_TAB_MAIN && GetPlayerPremium(playerid) < MARKET_VIP_TYPE) ? MARKET_VIP_DAYS : 0);
+    JSON_SetArray(json, "n", array);
+    Market_SendRaw(playerid, json);
+    return 1;
+}
+
+stock Market_CountSellableSources(playerid)
+{
+    new total = 0;
+
+    new account_id = GetPlayerAccountID(playerid);
+    if(account_id > 0)
+    {
+        new query[196];
+        mysql_format(mysql, query, sizeof(query), "SELECT item_id FROM inventory WHERE account_id = %d AND slot BETWEEN 1 AND %d", account_id, Inventory11_GetMaxSlots(playerid));
+        new Cache:result = mysql_query(mysql, query);
+
+        new rows = cache_num_rows();
+        for(new i = 0; i < rows; i++)
+        {
+            new item_id = cache_get_field_content_int(i, "item_id", mysql);
+            if(Market_IsSellableItem(item_id)) total++;
+        }
+        cache_delete(result);
+    }
+
+    new item_1, model_1, item_2, model_2;
+    Inventory11_GetActiveAccessories(playerid, item_1, model_1, item_2, model_2);
+    if(item_1 > 0) total++;
+    if(item_2 > 0) total++;
+
+    return total;
+}
+
+stock Node:Market_AppendInventoryCard(playerid, Node:array, sourceId, itemid, itemCount)
+{
+    new name[64];
+    Market_GetItemNameByData(itemid, itemCount, name, sizeof(name));
+
+    new Node:item = JSON_Object();
+    JSON_SetInt(item, "id", sourceId);
+    JSON_SetInt(item, "tp", MARKET_NOTIFICATION_NONE);
+    JSON_SetInt(item, "md", itemid);
+    JSON_SetInt(item, "ct", itemCount);
+    JSON_SetInt(item, "cs", MARKET_MIN_PRICE);
+    JSON_SetInt(item, "tm", 0);
+    JSON_SetInt(item, "ti", MARKET_LISTING_LIFETIME);
+    JSON_SetInt(item, "rt", Market_GetRarity(itemid, 0));
+    JSON_SetInt(item, "r", Market_GetRarity(itemid, 0));
+    JSON_SetInt(item, "pt", Market_GetProductType(itemid));
+    JSON_SetInt(item, "l", 0);
+    JSON_SetString(item, "dm", name);
+    JSON_SetString(item, "nm", GetPlayerNameEx(playerid));
+    JSON_SetString(item, "sl", GetPlayerNameEx(playerid));
+    return JSON_Append(array, item);
+}
+
+stock Market_SendInventory(playerid, page)
+{
+    if(page < 1) page = 1;
+    g_MarketCurrentTab[playerid] = MARKET_TAB_INVENTORY;
+    g_MarketCurrentPage[playerid] = page;
+
+    new total = Market_CountSellableSources(playerid);
+    new pages = (total + MARKET_PAGE_SIZE - 1) / MARKET_PAGE_SIZE;
+    if(pages < 1) pages = 1;
+    if(page > pages) page = pages;
+
+    new offset = (page - 1) * MARKET_PAGE_SIZE;
+    new added = 0, skipped = 0;
+    new Node:json = JSON_Object();
+    new Node:array = JSON_Array();
+
+    new account_id = GetPlayerAccountID(playerid);
+    if(account_id > 0)
+    {
+        new query[220];
+        mysql_format(mysql, query, sizeof(query), "SELECT item_id, model_id, slot, old_skin FROM inventory WHERE account_id = %d AND slot BETWEEN 1 AND %d ORDER BY slot ASC", account_id, Inventory11_GetMaxSlots(playerid));
+        new Cache:result = mysql_query(mysql, query);
+
+        new rows = cache_num_rows();
+        for(new i = 0; i < rows && added < MARKET_PAGE_SIZE; i++)
+        {
+            new item_id = cache_get_field_content_int(i, "item_id", mysql);
+            if(!Market_IsSellableItem(item_id)) continue;
+
+            new slot = cache_get_field_content_int(i, "slot", mysql);
+            new itemCount = 1;
+
+            if(item_id == 134)
+            {
+                new model_id = cache_get_field_content_int(i, "model_id", mysql);
+                new old_skin = cache_get_field_content_int(i, "old_skin", mysql);
+                itemCount = (old_skin > 0) ? old_skin : model_id;
+            }
+
+            if(skipped < offset)
+            {
+                skipped++;
+                continue;
+            }
+
+            array = Market_AppendInventoryCard(playerid, array, slot, item_id, itemCount);
+            added++;
+        }
+        cache_delete(result);
+    }
+
+    if(added < MARKET_PAGE_SIZE)
+    {
+        new item_1, model_1, item_2, model_2;
+        Inventory11_GetActiveAccessories(playerid, item_1, model_1, item_2, model_2);
+
+        if(item_1 > 0 && added < MARKET_PAGE_SIZE)
+        {
+            if(skipped < offset) skipped++;
+            else
+            {
+                array = Market_AppendInventoryCard(playerid, array, MARKET_ACTIVE_SLOT_BASE + 1, item_1, 1);
+                added++;
+            }
+        }
+
+        if(item_2 > 0 && added < MARKET_PAGE_SIZE)
+        {
+            if(skipped < offset) skipped++;
+            else
+            {
+                array = Market_AppendInventoryCard(playerid, array, MARKET_ACTIVE_SLOT_BASE + 2, item_2, 1);
+                added++;
+            }
+        }
+    }
+
+    JSON_SetInt(json, "t", 9);
+    Market_SetCommonPacketInfo(playerid, json, page, pages);
+    JSON_SetInt(json, "tm", 0);
+    JSON_SetArray(json, "n", array);
+    Market_SendRaw(playerid, json);
+    return 1;
+}
+
+stock Market_SendProfile(playerid)
+{
+    g_MarketCurrentTab[playerid] = MARKET_TAB_PROFILE;
+
+    new Node:json = JSON_Object();
+    JSON_SetInt(json, "t", 1);
+    JSON_SetString(json, "n", GetPlayerNameEx(playerid));
+    JSON_SetInt(json, "id", GetPlayerAccountID(playerid));
+    JSON_SetInt(json, "m", GetPlayerMoneyEx(playerid));
+    JSON_SetInt(json, "ct", Market_GetActiveLotsCount(playerid));
+    JSON_SetInt(json, "lp", Market_GetActiveLotsCount(playerid));
+    JSON_SetInt(json, "lh", Market_GetSoldLotsCount(playerid));
+    JSON_SetInt(json, "ma", Market_GetAllRevenue(playerid));
+    JSON_SetInt(json, "tm", 0);
+    Market_SendRaw(playerid, json);
+    return 1;
+}
+
+stock Market_SendOpenPacket(playerid)
+{
+    // пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅ SQL-пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ: пїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ Java GUI 77.
+    new Node:json = JSON_Object();
+    new Node:array = JSON_Array();
+
+    array = Market_AppendTestSkinNode(array);
+
+    JSON_SetInt(json, "t", 2);
+    JSON_SetInt(json, "m", GetPlayerMoneyEx(playerid));
+    JSON_SetInt(json, "v", Market_GetVipTypeForGui(playerid));
+    JSON_SetInt(json, "vm", MARKET_VIP_PRICE);
+    JSON_SetInt(json, "lp", 0);
+    JSON_SetInt(json, "lh", 0);
+    JSON_SetInt(json, "tm", (Market_GetVipTypeForGui(playerid) < MARKET_VIP_TYPE) ? MARKET_VIP_DAYS : 0);
+    JSON_SetInt(json, "ls", 1);
+    JSON_SetInt(json, "lt", 1);
+    JSON_SetArray(json, "n", array);
+    return Market_SendRaw(playerid, json);
+}
+
+
+stock Market_ShowSellDialog(playerid)
+{
+    new account_id = GetPlayerAccountID(playerid);
+    if(account_id <= 0) return SendClientMessage(playerid, 0xFF0000FF, "Error account");
+
+    new list[2048];
+    list[0] = 0;
+    new count = 0;
+    new query[220];
+    mysql_format(mysql, query, sizeof(query), "SELECT slot, item_id, model_id, amount FROM inventory WHERE account_id = %d AND item_id > 0 ORDER BY slot ASC LIMIT 40", account_id);
+    new Cache:result = mysql_query(mysql, query);
+    new rows = cache_num_rows();
+    for(new i = 0; i < rows; i++)
+    {
+        new slot = cache_get_field_content_int(i, "slot", mysql);
+        new itemid = cache_get_field_content_int(i, "item_id", mysql);
+        new model = cache_get_field_content_int(i, "model_id", mysql);
+        new amount = cache_get_field_content_int(i, "amount", mysql);
+        if(amount < 1) amount = 1;
+        new mkt_line[96];
+        format(mkt_line, sizeof(mkt_line), "Slot %d | Item %d (model %d) x%d\n", slot, itemid, model, amount);
+        if(strlen(list) + strlen(mkt_line) < sizeof(list) - 2)
+        {
+            strcat(list, mkt_line);
+            count++;
+        }
+    }
+    cache_delete(result);
+
+    if(count == 0)
+    {
+        SendClientMessage(playerid, 0xFF6600FF, "Inventar pust - nechego prodat");
+        return 1;
+    }
+    ShowPlayerDialog(playerid, DIALOG_MP_SELL_LIST, DIALOG_STYLE_LIST, "Market - Prodat predmet", list, "Dalee", "Otmena");
+    return 1;
+}
+
+stock Market_ShowBuyDialog(playerid)
+{
+    new list[2048];
+    list[0] = 0;
+    new query[256];
+    mysql_format(mysql, query, sizeof(query), "SELECT id, item_name, item_count, price, seller_name FROM marketplace_items WHERE status=0 AND (expires_at=0 OR expires_at>%d) ORDER BY id DESC LIMIT 30", gettime());
+    new Cache:result = mysql_query(mysql, query);
+    new rows = cache_num_rows();
+    for(new i = 0; i < rows; i++)
+    {
+        new id = cache_get_field_content_int(i, "id", mysql);
+        new price = cache_get_field_content_int(i, "price", mysql);
+        new cnt = cache_get_field_content_int(i, "item_count", mysql);
+        new iname[64], sname[24];
+        cache_get_field_content(i, "item_name", iname, mysql, sizeof(iname));
+        cache_get_field_content(i, "seller_name", sname, mysql, sizeof(sname));
+        new mkt_line[128];
+        format(mkt_line, sizeof(mkt_line), "#%d %s x%d | %d rub | %s\n", id, iname, cnt, price, sname);
+        if(strlen(list) + strlen(mkt_line) < sizeof(list) - 2)
+            strcat(list, mkt_line);
+    }
+    cache_delete(result);
+    if(!list[0]) format(list, sizeof(list), "Net aktivnyh lotov");
+    ShowPlayerDialog(playerid, DIALOG_MP_BUY_LIST, DIALOG_STYLE_LIST, "Market - Loty", list, "Kupit", "Zakryt");
+    return 1;
+}
+
+
+stock ShowTireServiceGUI(playerid)
+{
+    if(GetPlayerState(playerid) != PLAYER_STATE_DRIVER)
+        return SendClientMessage(playerid, 0xFF0000FF, "Tolko voditel");
+    ShowPlayerDialog(playerid, DIALOG_SHINO_MENU, DIALOG_STYLE_LIST,
+        "Shinomontazh",
+        "1. Smenit kolesa (5000)\n2. Pokraski diskov (3000)\n3. Remont koles (2000)\n4. Vyyehat",
+        "OK", "Zakryt");
+    return 1;
+}
+
+stock ShowStoGUI(playerid)
+{
+    if(GetPlayerState(playerid) != PLAYER_STATE_DRIVER)
+        return SendClientMessage(playerid, 0xFF0000FF, "Tolko voditel");
+    ShowPlayerDialog(playerid, DIALOG_STO_MENU, DIALOG_STYLE_LIST,
+        "STO",
+        "1. Polnyy remont (10000)\n2. Dvigateль (15000)\n3. Podveska (8000)\n4. Tormoza (7000)\n5. Vyyehat",
+        "OK", "Zakryt");
+    return 1;
+}
+
+stock ShowTuningStylingGUI(playerid)
+{
+    if(GetPlayerState(playerid) != PLAYER_STATE_DRIVER)
+        return SendClientMessage(playerid, 0xFF0000FF, "Tolko voditel");
+    // use existing /tuning dialog if any
+    callcmd::tuning(playerid, "");
+    return 1;
+}
+
+stock ShowTuningTehGUI(playerid)
+{
+    return ShowStoGUI(playerid);
+}
+
+stock Kranin_TryOpenServiceOnHorn(playerid)
+{
+    if(GetPlayerState(playerid) != PLAYER_STATE_DRIVER) return 0;
+    for(new i = 0; i < 3; i++)
+    {
+        if(IsPlayerInRangeOfPoint(playerid, 8.0, g_TuningEnter[i][0], g_TuningEnter[i][1], g_TuningEnter[i][2]))
+        {
+            ShowTuningStylingGUI(playerid);
+            return 1;
+        }
+        if(IsPlayerInRangeOfPoint(playerid, 8.0, g_TuningEnter2[i][0], g_TuningEnter2[i][1], g_TuningEnter2[i][2]))
+        {
+            ShowTireServiceGUI(playerid);
+            return 1;
+        }
+        if(IsPlayerInRangeOfPoint(playerid, 8.0, g_TuningEnter3[i][0], g_TuningEnter3[i][1], g_TuningEnter3[i][2]))
+        {
+            ShowStoGUI(playerid);
+            return 1;
+        }
+        if(IsPlayerInRangeOfPoint(playerid, 8.0, g_TuningEnter4[i][0], g_TuningEnter4[i][1], g_TuningEnter4[i][2]))
+        {
+            ShowTuningTehGUI(playerid);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+stock Market_Open(playerid)
+{
+    Market_ResetPlayer(playerid);
+    SendClientMessage(playerid, 0xFFCC00FF, "[Market] GUI + /sellitem prodat | /mylist loty");
+
+    // First packet must open Java GUI 77. Product list is sent after that as update.
+    g_MarketOpenPacket[playerid] = true;
+    Market_SendOpenPacket(playerid);
+
+    return Market_SendProductsList(playerid, 2, 1, MARKET_TAB_MAIN);
+}
+
+
+stock Market_SelectSellItem(playerid, slot)
+{
+    new itemid, itemCount;
+    if(!Market_GetSourceItem(playerid, slot, itemid, itemCount)) return Market_SendError(playerid, 10, "пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ");
+    if(!Market_IsSellableItem(itemid)) return Market_SendError(playerid, 10, "пїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅ пїЅпїЅпїЅпїЅпїЅ");
+
+    g_MarketSelectedSlot[playerid] = slot;
+
+    new Node:json = JSON_Object();
+    JSON_SetInt(json, "t", 10);
+    JSON_SetInt(json, "rk", 999);
+    JSON_SetInt(json, "id", slot);
+    JSON_SetInt(json, "md", itemid);
+    JSON_SetInt(json, "ct", itemCount);
+    JSON_SetInt(json, "m", GetPlayerMoneyEx(playerid));
+    Market_SendRaw(playerid, json);
+    return 1;
+}
+
+stock Market_PublishSelected(playerid, price, hot)
+{
+    new slot = g_MarketSelectedSlot[playerid];
+    if(slot < 0)
+        return Market_SendError(playerid, 11, "Vyberite predmet iz inventarya");
+    if(price < MARKET_MIN_PRICE || price > MARKET_MAX_PRICE)
+        return Market_SendError(playerid, 11, "Nevernaya cena");
+
+    new itemid, itemCount;
+    if(!Market_GetSourceItem(playerid, slot, itemid, itemCount))
+        return Market_SendError(playerid, 11, "Predmet ne nayden v inventare");
+    if(!Market_IsSellableItem(itemid))
+        return Market_SendError(playerid, 11, "Etot predmet nelzya prodat");
+
+    new name[64];
+    Market_GetItemNameByData(itemid, itemCount, name, sizeof(name));
+
+    new listingId = Market_InsertListing(playerid, itemid, itemCount, price, hot, name);
+    if(listingId <= 0)
+    {
+        SendClientMessage(playerid, 0xFF0000FF, "[Market] SQL error - check server_log [MARKET] INSERT");
+        return Market_SendError(playerid, 11, "SQL oshibka sozdaniya lota");
+    }
+
+    if(!Market_RemoveSourceItem(playerid, slot))
+    {
+        new query[160];
+        mysql_format(mysql, query, sizeof(query), "UPDATE `marketplace_items` SET `status`=2 WHERE `id`=%d LIMIT 1", listingId);
+        mysql_query(mysql, query);
+        return Market_SendError(playerid, 11, "Ne udalos snyat predmet s inventarya");
+    }
+
+    g_MarketSelectedSlot[playerid] = -1;
+    new msg[96];
+    format(msg, sizeof(msg), "Lot #%d sozdan. Cena: %d", listingId, price);
+    SendClientMessage(playerid, 0x66CC00FF, msg);
+    ShowNotificationNew(playerid, 0, 5, 0, 0, msg, "");
+    return Market_SendProductsList(playerid, 5, 1, MARKET_TAB_MY_STORE);
+}
+
+
+
+
+stock Market_PublishSource(playerid, sourceId, price, hot)
+{
+    if(GetPlayerAccountID(playerid) <= 0) return ShowNotificationNew(playerid, 0, 5, 0, 0, "пїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ", "");
+    if(price < MARKET_MIN_PRICE || price > MARKET_MAX_PRICE) return ShowNotificationNew(playerid, 2, 5, 0, 0, "пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅ. пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅ пїЅпїЅ 100 пїЅпїЅ 999999999", "");
+
+    if(!Market_ResolveCommandSource(playerid, sourceId)) return ShowNotificationNew(playerid, 2, 5, 0, 0, "пїЅ пїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅ", "");
+
+    new itemid, itemCount;
+    if(!Market_GetSourceItem(playerid, sourceId, itemid, itemCount)) return ShowNotificationNew(playerid, 2, 5, 0, 0, "пїЅ пїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅ", "");
+    if(!Market_IsSellableItem(itemid)) return ShowNotificationNew(playerid, 2, 5, 0, 0, "пїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅ пїЅпїЅпїЅпїЅпїЅ", "");
+
+    new name[64];
+    Market_GetItemNameByData(itemid, itemCount, name, sizeof(name));
+
+    new listingId = Market_InsertListing(playerid, itemid, itemCount, price, hot, name);
+    if(listingId <= 0)
+    {
+        return ShowNotificationNew(playerid, 2, 5, 0, 0, "SQL пїЅпїЅпїЅпїЅпїЅпїЅ: пїЅпїЅпїЅ пїЅпїЅ пїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ", "");
+    }
+
+    if(!Market_RemoveSourceItem(playerid, sourceId))
+    {
+        new query[160];
+        mysql_format(mysql, query, sizeof(query), "UPDATE `marketplace_items` SET `status`=2 WHERE `id`=%d LIMIT 1", listingId);
+        mysql_query(mysql, query);
+        return ShowNotificationNew(playerid, 2, 5, 0, 0, "пїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ", "");
+    }
+
+    new msg[128];
+    format(msg, sizeof(msg), "пїЅпїЅпїЅ #%d пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅ %d$", listingId, price);
+    ShowNotificationNew(playerid, 1, 5, 0, 0, msg, "");
+
+    g_MarketOpenPacket[playerid] = true;
+    return Market_SendProductsList(playerid, 2, 1, MARKET_TAB_MAIN);
+}
+
+
+stock Market_BuyTestSkin(playerid)
+{
+    if(GetPlayerMoneyEx(playerid) < MARKET_TEST_SKIN_PRICE) return Market_SendError(playerid, 13, "пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅ");
+    if(!Market_CanReceiveItem(playerid, 134, MARKET_TEST_SKIN_MODEL)) return Market_SendError(playerid, 13, "пїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅ");
+    if(Inventory11_AddItemToDatabase(playerid, 134, MARKET_TEST_SKIN_MODEL, 1, 0, 0) == -1) return Market_SendError(playerid, 13, "пїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅ");
+
+    GivePlayerMoneyEx(playerid, -MARKET_TEST_SKIN_PRICE);
+
+    new Node:json = JSON_Object();
+    JSON_SetInt(json, "t", 13);
+    JSON_SetInt(json, "err", 1);
+    JSON_SetInt(json, "m", GetPlayerMoneyEx(playerid));
+    JSON_SetInt(json, "id", MARKET_TEST_SKIN_LISTING_ID);
+    Market_SendRaw(playerid, json);
+
+    ShowNotificationNew(playerid, 1, 5, 0, 0, "TEST M3MORY @WHEREMYMEMORY", "");
+    return Market_SendProductsList(playerid, 2, g_MarketCurrentPage[playerid], MARKET_TAB_MAIN);
+}
+
+stock Market_SelectVip(playerid)
+{
+    g_MarketSelectedListing[playerid] = 0;
+
+    new Node:json = JSON_Object();
+    JSON_SetInt(json, "t", 12);
+    JSON_SetInt(json, "id", 0);
+    JSON_SetInt(json, "tp", MARKET_NOTIFICATION_NONE);
+    JSON_SetInt(json, "md", 0);
+    JSON_SetInt(json, "ct", 1);
+    JSON_SetInt(json, "cs", MARKET_VIP_PRICE);
+    JSON_SetInt(json, "tm", MARKET_VIP_DAYS);
+    JSON_SetInt(json, "ti", MARKET_VIP_DAYS * 86400);
+    JSON_SetInt(json, "rt", 5);
+    JSON_SetInt(json, "r", 5);
+    JSON_SetInt(json, "pt", MARKET_TYPE_OTHER);
+    JSON_SetInt(json, "m", GetPlayerMoneyEx(playerid));
+    JSON_SetString(json, "dm", "Platinum VIP пїЅпїЅ 30 пїЅпїЅпїЅпїЅ");
+    JSON_SetString(json, "nm", "Market");
+    JSON_SetString(json, "sl", "Market");
+    return Market_SendRaw(playerid, json);
+}
+
+stock Market_BuyVip(playerid)
+{
+    if(GetPlayerMoneyEx(playerid) < MARKET_VIP_PRICE) return Market_SendError(playerid, 26, "пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅ VIP");
+
+    GivePlayerMoneyEx(playerid, -MARKET_VIP_PRICE);
+    // VIP / premium days via existing API if present
+    #if defined SetPlayerPremium
+        SetPlayerPremium(playerid, MARKET_VIP_TYPE);
+    #endif
+    #if defined AddPlayerPremiumDays
+        AddPlayerPremiumDays(playerid, MARKET_VIP_DAYS);
+    #endif
+    SendClientMessage(playerid, 0x66CC00FF, "[Market] VIP purchased");
+
+    new Node:json = JSON_Object();
+    JSON_SetInt(json, "t", 26);
+    JSON_SetInt(json, "m", GetPlayerMoneyEx(playerid));
+    JSON_SetInt(json, "lp", Market_GetActiveLotsCount(playerid));
+    Market_SendRaw(playerid, json);
+
+    ShowNotificationNew(playerid, 1, 5, 0, 0, "пїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ Platinum VIP пїЅпїЅ 30 пїЅпїЅпїЅпїЅ", "");
+    return Market_SendProductsList(playerid, 2, 1, MARKET_TAB_MAIN);
+}
+
+stock Market_SelectBuy(playerid, listingId)
+{
+    if(listingId == 0) return Market_SelectVip(playerid);
+    if(listingId == MARKET_TEST_SKIN_LISTING_ID)
+    {
+        g_MarketSelectedListing[playerid] = listingId;
+        new Node:json = JSON_Object();
+        Market_FillTestSkinNode(json);
+        JSON_SetInt(json, "t", 12);
+        JSON_SetInt(json, "m", GetPlayerMoneyEx(playerid));
+        return Market_SendRaw(playerid, json);
+    }
+
+    new query[256];
+    mysql_format(mysql, query, sizeof(query), "SELECT * FROM `marketplace_items` WHERE `id`=%d AND `status`=0 AND (`expires_at`=0 OR `expires_at`>%d) LIMIT 1", listingId, gettime());
+    new Cache:result = mysql_query(mysql, query);
+    if(cache_num_rows() == 0)
+    {
+        cache_delete(result);
+        return Market_SendError(playerid, 12, "пїЅпїЅпїЅ пїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ");
+    }
+
+    new sellerId = cache_get_field_content_int(0, "seller_id", mysql);
+    if(sellerId == GetPlayerAccountID(playerid))
+    {
+        cache_delete(result);
+        return Market_SendError(playerid, 12, "пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅ пїЅпїЅпїЅ");
+    }
+
+    g_MarketSelectedListing[playerid] = listingId;
+    new Node:json = JSON_Object();
+    Market_FillProductNodeFromCache(json, 0, 0, playerid);
+    JSON_SetInt(json, "t", 12);
+    JSON_SetInt(json, "m", GetPlayerMoneyEx(playerid));
+    cache_delete(result);
+    Market_SendRaw(playerid, json);
+    return 1;
+}
+
+stock bool:Market_CanReceiveItem(playerid, itemid, itemCount)
+{
+    if(itemid == 134)
+    {
+        if(itemCount < 0 || itemCount > 311) return false;
+        if(!Market_Inv11_HasFreeSlot(playerid)) return false;
+        if(!Inventory11_CanAddItemWeight(playerid, 134, 1)) return false;
+        return true;
+    }
+
+    if(Market_IsAccessoryItem(itemid))
+    {
+        if(Market_GetAccessoryIdByItem(itemid) < 0) return false;
+        if(!Market_Inv11_HasFreeSlot(playerid)) return false;
+        if(!Inventory11_CanAddItemWeight(playerid, itemid, 1)) return false;
+        return true;
+    }
+
+    return false;
+}
+
+stock bool:Market_GiveItemToPlayer(playerid, itemid, itemCount)
+{
+    if(itemid == 134)
+    {
+        new skin_model = (itemCount > 0) ? itemCount : 78;
+        return (Inventory11_AddItemToDatabase(playerid, 134, skin_model, 1, 0, 0) != -1);
+    }
+
+    if(Market_IsAccessoryItem(itemid))
+    {
+        new modelid = Market_GetAccessoryIdByItem(itemid);
+        if(modelid < 0) return false;
+
+        return (Inventory11_AddItemToDatabase(playerid, itemid, 1, 1, modelid, 0) != -1);
+    }
+
+    return false;
+}
+
+stock Market_BuyListing(playerid, listingId)
+{
+    if(listingId == 0) return Market_BuyVip(playerid);
+    if(listingId <= 0) listingId = g_MarketSelectedListing[playerid];
+    if(listingId == MARKET_TEST_SKIN_LISTING_ID) return Market_BuyTestSkin(playerid);
+    if(listingId <= 0) return Market_SendError(playerid, 13, "пїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅ");
+
+    new query[512];
+    mysql_format(mysql, query, sizeof(query), "SELECT * FROM `marketplace_items` WHERE `id`=%d AND `status`=0 AND (`expires_at`=0 OR `expires_at`>%d) LIMIT 1", listingId, gettime());
+    new Cache:result = mysql_query(mysql, query);
+    if(cache_num_rows() == 0)
+    {
+        cache_delete(result);
+        return Market_SendError(playerid, 13, "пїЅпїЅпїЅ пїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ");
+    }
+
+    new sellerId = cache_get_field_content_int(0, "seller_id", mysql);
+    new itemid = cache_get_field_content_int(0, "item_id", mysql);
+    new itemCount = cache_get_field_content_int(0, "item_count", mysql);
+    new price = cache_get_field_content_int(0, "price", mysql);
+
+    if(sellerId == GetPlayerAccountID(playerid))
+    {
+        cache_delete(result);
+        return Market_SendError(playerid, 13, "пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅ пїЅпїЅпїЅ");
+    }
+
+    if(GetPlayerMoneyEx(playerid) < price)
+    {
+        cache_delete(result);
+        return Market_SendError(playerid, 13, "пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅ");
+    }
+
+    if(!Market_CanReceiveItem(playerid, itemid, itemCount))
+    {
+        cache_delete(result);
+        return Market_SendError(playerid, 13, "пїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅ");
+    }
+
+    mysql_format(mysql, query, sizeof(query), "UPDATE `marketplace_items` SET `status`=1, `buyer_id`=%d, `buyer_name`='%e', `sold_at`=%d WHERE `id`=%d AND `status`=0", GetPlayerAccountID(playerid), GetPlayerNameEx(playerid), gettime(), listingId);
+    new Cache:buyResult = mysql_query(mysql, query);
+    new affected = cache_affected_rows(mysql);
+    cache_delete(buyResult);
+
+    if(affected <= 0)
+    {
+        cache_delete(result);
+        return Market_SendError(playerid, 13, "пїЅпїЅпїЅ пїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ");
+    }
+
+    if(!Market_GiveItemToPlayer(playerid, itemid, itemCount))
+    {
+        mysql_format(mysql, query, sizeof(query), "UPDATE `marketplace_items` SET `status`=0, `buyer_id`=0, `buyer_name`='', `sold_at`=0 WHERE `id`=%d AND `buyer_id`=%d", listingId, GetPlayerAccountID(playerid));
+        mysql_tquery(mysql, query, "", "");
+        cache_delete(result);
+        return Market_SendError(playerid, 13, "пїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅ");
+    }
+
+    GivePlayerMoneyEx(playerid, -price);
+
+    new sellerOnline = Market_FindOnlineBySqlId(sellerId);
+    if(sellerOnline != INVALID_PLAYER_ID)
+    {
+        GivePlayerMoneyEx(sellerOnline, price);
+        ShowNotificationNew(sellerOnline, 1, 5, 0, 0, "пїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅ", "");
+    }
+    else
+    {
+        mysql_format(mysql, query, sizeof(query), "UPDATE `players` SET `money`=`money`+%d WHERE `id`=%d", price, sellerId);
+        mysql_tquery(mysql, query, "", "");
+    }
+
+    cache_delete(result);
+
+    g_MarketSelectedListing[playerid] = -1;
+    new Node:json = JSON_Object();
+    JSON_SetInt(json, "t", 13);
+    JSON_SetInt(json, "err", 1);
+    JSON_SetInt(json, "m", GetPlayerMoneyEx(playerid));
+    JSON_SetInt(json, "id", listingId);
+    Market_SendRaw(playerid, json);
+    ShowNotificationNew(playerid, 1, 5, 0, 0, "пїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ", "");
+
+    Market_SendProductsList(playerid, 2, g_MarketCurrentPage[playerid], MARKET_TAB_MAIN);
+    return 1;
+}
+
+stock Market_SelectEdit(playerid, listingId)
+{
+    new query[256];
+    mysql_format(mysql, query, sizeof(query), "SELECT `id` FROM `marketplace_items` WHERE `id`=%d AND `seller_id`=%d AND `status`=0 LIMIT 1", listingId, GetPlayerAccountID(playerid));
+    new Cache:result = mysql_query(mysql, query);
+    if(cache_num_rows() == 0)
+    {
+        cache_delete(result);
+        return Market_SendError(playerid, 15, "пїЅпїЅпїЅ пїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ");
+    }
+    cache_delete(result);
+
+    g_MarketSelectedListing[playerid] = listingId;
+    new Node:json = JSON_Object();
+    JSON_SetInt(json, "t", 15);
+    JSON_SetInt(json, "id", listingId);
+    JSON_SetInt(json, "rk", 999);
+    Market_SendRaw(playerid, json);
+    return 1;
+}
+
+stock Market_EditSelected(playerid, price, hot)
+{
+    new listingId = g_MarketSelectedListing[playerid];
+    if(listingId <= 0) return Market_SendError(playerid, 16, "пїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅ");
+    if(price < MARKET_MIN_PRICE || price > MARKET_MAX_PRICE) return Market_SendError(playerid, 16, "пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅ");
+
+    new query[256];
+    mysql_format(mysql, query, sizeof(query), "UPDATE `marketplace_items` SET `price`=%d, `is_hot`=%d WHERE `id`=%d AND `seller_id`=%d AND `status`=0", price, hot ? 1 : 0, listingId, GetPlayerAccountID(playerid));
+    mysql_tquery(mysql, query, "", "");
+
+    new Node:json = JSON_Object();
+    JSON_SetInt(json, "t", 16);
+    JSON_SetInt(json, "err", 1);
+    JSON_SetInt(json, "id", listingId);
+    JSON_SetInt(json, "cs", price);
+    JSON_SetInt(json, "rs", hot ? 1 : 0);
+    Market_SendRaw(playerid, json);
+    ShowNotificationNew(playerid, 1, 5, 0, 0, "пїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ", "");
+    Market_SendProductsList(playerid, 5, g_MarketCurrentPage[playerid], MARKET_TAB_MY_STORE);
+    return 1;
+}
+
+stock Market_DeleteSelected(playerid)
+{
+    new listingId = g_MarketSelectedListing[playerid];
+    if(listingId <= 0) return Market_SendError(playerid, 17, "пїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅ");
+
+    new query[256];
+    mysql_format(mysql, query, sizeof(query), "SELECT * FROM `marketplace_items` WHERE `id`=%d AND `seller_id`=%d AND `status`=0 LIMIT 1", listingId, GetPlayerAccountID(playerid));
+    new Cache:result = mysql_query(mysql, query);
+    if(cache_num_rows() == 0)
+    {
+        cache_delete(result);
+        return Market_SendError(playerid, 17, "пїЅпїЅпїЅ пїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ");
+    }
+
+    new itemid = cache_get_field_content_int(0, "item_id", mysql);
+    new itemCount = cache_get_field_content_int(0, "item_count", mysql);
+
+    if(!Market_GiveItemToPlayer(playerid, itemid, itemCount))
+    {
+        cache_delete(result);
+        return Market_SendError(playerid, 17, "пїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅ");
+    }
+    cache_delete(result);
+
+    mysql_format(mysql, query, sizeof(query), "UPDATE `marketplace_items` SET `status`=2 WHERE `id`=%d AND `seller_id`=%d AND `status`=0", listingId, GetPlayerAccountID(playerid));
+    mysql_tquery(mysql, query, "", "");
+    g_MarketSelectedListing[playerid] = -1;
+
+    new Node:json = JSON_Object();
+    JSON_SetInt(json, "t", 17);
+    JSON_SetInt(json, "err", 1);
+    JSON_SetInt(json, "id", listingId);
+    Market_SendRaw(playerid, json);
+    ShowNotificationNew(playerid, 1, 5, 0, 0, "пїЅпїЅпїЅ пїЅпїЅпїЅпїЅ пїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅ", "");
+    Market_SendProductsList(playerid, 5, g_MarketCurrentPage[playerid], MARKET_TAB_MY_STORE);
+    return 1;
+}
+
+stock Market_ToggleLike(playerid, listingId)
+{
+    if(listingId <= 0) return 1;
+    new query[256];
+    mysql_format(mysql, query, sizeof(query), "SELECT `listing_id` FROM `marketplace_likes` WHERE `player_id`=%d AND `listing_id`=%d LIMIT 1", GetPlayerAccountID(playerid), listingId);
+    new Cache:result = mysql_query(mysql, query);
+    if(cache_num_rows() > 0)
+    {
+        cache_delete(result);
+        mysql_format(mysql, query, sizeof(query), "DELETE FROM `marketplace_likes` WHERE `player_id`=%d AND `listing_id`=%d", GetPlayerAccountID(playerid), listingId);
+        mysql_tquery(mysql, query, "", "");
+    }
+    else
+    {
+        cache_delete(result);
+        mysql_format(mysql, query, sizeof(query), "INSERT INTO `marketplace_likes` (`player_id`,`listing_id`,`created_at`) VALUES (%d,%d,%d)", GetPlayerAccountID(playerid), listingId, gettime());
+        mysql_tquery(mysql, query, "", "");
+    }
+
+    new Node:json = JSON_Object();
+    JSON_SetInt(json, "t", 14);
+    JSON_SetInt(json, "err", 1);
+    JSON_SetInt(json, "id", listingId);
+    Market_SendRaw(playerid, json);
+    return 1;
+}
+
+stock Market_SendHistoryInfo(playerid, listingId)
+{
+    new query[256];
+    mysql_format(mysql, query, sizeof(query), "SELECT * FROM `marketplace_items` WHERE `id`=%d AND (`seller_id`=%d OR `buyer_id`=%d) LIMIT 1", listingId, GetPlayerAccountID(playerid), GetPlayerAccountID(playerid));
+    new Cache:result = mysql_query(mysql, query);
+    if(cache_num_rows() == 0)
+    {
+        cache_delete(result);
+        return Market_SendError(playerid, 18, "пїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅ пїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅ");
+    }
+
+    new Node:json = JSON_Object();
+    Market_FillProductNodeFromCache(json, 0, 1, playerid);
+    JSON_SetInt(json, "t", 18);
+    JSON_SetInt(json, "tb", cache_get_field_content_int(0, "sold_at", mysql));
+    cache_delete(result);
+    Market_SendRaw(playerid, json);
+    return 1;
+}
+
+stock Marketplace_HandlePacket(playerid, Node:json)
+{
+    new type;
+    JSON_GetInt(json, "t", type);
+
+    switch(type)
+    {
+            case 1:
+            {
+                return Market_SendProfile(playerid);
+            }
+            case 2:
+            {
+                g_MarketCurrentTab[playerid] = MARKET_TAB_MAIN;
+                return Market_SendProductsList(playerid, 2, 1, MARKET_TAB_MAIN);
+            }
+            case 3:
+            {
+                g_MarketCurrentTab[playerid] = MARKET_TAB_HISTORY;
+                return Market_SendProductsList(playerid, 3, 1, MARKET_TAB_HISTORY);
+            }
+            case 4:
+            {
+                g_MarketCurrentTab[playerid] = MARKET_TAB_FAVORITES;
+                return Market_SendProductsList(playerid, 4, 1, MARKET_TAB_FAVORITES);
+            }
+            case 5:
+            {
+                g_MarketCurrentTab[playerid] = MARKET_TAB_MY_STORE;
+                return Market_SendProductsList(playerid, 5, 1, MARKET_TAB_MY_STORE);
+            }
+            case 6:
+            {
+                new page;
+                JSON_GetInt(json, "lt", page);
+                if(page <= 0) page = 1;
+                switch(g_MarketCurrentTab[playerid])
+                {
+                    case MARKET_TAB_HISTORY: return Market_SendProductsList(playerid, 3, page, MARKET_TAB_HISTORY);
+                    case MARKET_TAB_FAVORITES: return Market_SendProductsList(playerid, 4, page, MARKET_TAB_FAVORITES);
+                    case MARKET_TAB_MY_STORE: return Market_SendProductsList(playerid, 5, page, MARKET_TAB_MY_STORE);
+                    case MARKET_TAB_INVENTORY: return Market_SendInventory(playerid, page);
+                    default: return Market_SendProductsList(playerid, 2, page, MARKET_TAB_MAIN);
+                }
+            }
+            case 7:
+            {
+                ShowNotificationNew(playerid, 2, 5, 0, 0, "пїЅпїЅпїЅпїЅпїЅ пїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ", "");
+                return 1;
+            }
+            case 8:
+            {
+                if(g_MarketCurrentTab[playerid] == MARKET_TAB_INVENTORY) return Market_SendInventory(playerid, 1);
+                return Market_SendProductsList(playerid, 8, 1, g_MarketCurrentTab[playerid]);
+            }
+            case 9:
+            {
+                return Market_SendInventory(playerid, 1);
+            }
+            case 10:
+            {
+                new slot;
+                slot = 0;
+                JSON_GetInt(json, "id", slot);
+                if(slot <= 0) JSON_GetInt(json, "s", slot);
+                if(slot <= 0) JSON_GetInt(json, "slot", slot);
+                printf("[MARKET] select sell slot=%d", slot);
+                return Market_SelectSellItem(playerid, slot);
+            }
+            case 11:
+            {
+                new price, hot;
+                price = 0; hot = 0;
+                JSON_GetInt(json, "cs", price);
+                if(price <= 0) JSON_GetInt(json, "p", price);
+                if(price <= 0) JSON_GetInt(json, "price", price);
+                if(price <= 0) JSON_GetInt(json, "c", price);
+                JSON_GetInt(json, "rs", hot);
+                if(!hot) JSON_GetInt(json, "h", hot);
+                printf("[MARKET] publish packet price=%d hot=%d slot=%d", price, hot, g_MarketSelectedSlot[playerid]);
+                if(price <= 0)
+                    return Market_SendError(playerid, 11, "Ukazhite cenu");
+                return Market_PublishSelected(playerid, price, hot);
+            }
+            case 110: // fallback publish from dialog slot
+            {
+                new price, slot;
+                JSON_GetInt(json, "cs", price);
+                JSON_GetInt(json, "id", slot);
+                if(slot > 0) g_MarketSelectedSlot[playerid] = slot;
+                return Market_PublishSelected(playerid, price, 0);
+            }
+            case 12:
+            {
+                new listingId;
+                JSON_GetInt(json, "id", listingId);
+                return Market_SelectBuy(playerid, listingId);
+            }
+            case 13:
+            {
+                new listingId;
+                JSON_GetInt(json, "id", listingId);
+                return Market_BuyListing(playerid, listingId);
+            }
+            case 14:
+            {
+                new listingId;
+                JSON_GetInt(json, "id", listingId);
+                return Market_ToggleLike(playerid, listingId);
+            }
+            case 15:
+            {
+                new listingId;
+                JSON_GetInt(json, "id", listingId);
+                return Market_SelectEdit(playerid, listingId);
+            }
+            case 16:
+            {
+                new price, hot;
+                JSON_GetInt(json, "cs", price);
+                JSON_GetInt(json, "rs", hot);
+                return Market_EditSelected(playerid, price, hot);
+            }
+            case 17:
+            {
+                return Market_DeleteSelected(playerid);
+            }
+            case 18:
+            {
+                new listingId;
+                JSON_GetInt(json, "id", listingId);
+                return Market_SendHistoryInfo(playerid, listingId);
+            }
+            case 19:
+            {
+                JSON_GetString(json, "s", g_MarketSearch[playerid], 32);
+                if(g_MarketCurrentTab[playerid] == MARKET_TAB_INVENTORY) return Market_SendInventory(playerid, 1);
+                return Market_SendProductsList(playerid, 19, 1, g_MarketCurrentTab[playerid]);
+            }
+            case 20:
+            {
+                return Market_BuyVip(playerid);
+            }
+            case 25:
+            {
+                return Market_SelectVip(playerid);
+            }
+            case 21:
+            {
+                JSON_GetInt(json, "st", g_MarketSort[playerid]);
+                if(g_MarketCurrentTab[playerid] == MARKET_TAB_INVENTORY) return Market_SendInventory(playerid, 1);
+                if(g_MarketCurrentTab[playerid] == MARKET_TAB_MY_STORE) return Market_SendProductsList(playerid, 5, 1, MARKET_TAB_MY_STORE);
+                return Market_SendProductsList(playerid, 21, 1, g_MarketCurrentTab[playerid]);
+            }
+            case 26:
+            {
+                new Node:answer = JSON_Object();
+                JSON_SetInt(answer, "t", 26);
+                JSON_SetInt(answer, "m", GetPlayerMoneyEx(playerid));
+                JSON_SetInt(answer, "lp", Market_GetActiveLotsCount(playerid));
+                Market_SendRaw(playerid, answer);
+                return 1;
+            }
+    }
+
+    new close;
+    JSON_GetInt(json, "c", close);
+    if(close == 1)
+    {
+        g_MarketSelectedSlot[playerid] = -1;
+        g_MarketSelectedListing[playerid] = -1;
+        return 1;
+    }
+    return 1;
+}
+
+
+CMD:sellitem(playerid, params[])
+{
+    #pragma unused params
+    if(!IsPlayerLogged(playerid)) return 1;
+    return Market_ShowSellDialog(playerid);
+}
+
+CMD:mylist(playerid, params[])
+{
+    #pragma unused params
+    if(!IsPlayerLogged(playerid)) return 1;
+    return Market_ShowBuyDialog(playerid);
+}
+
+
+
+// ========== BR Pro: aliases (spin/everyprize already as cmd:) ==========
+CMD:orel(playerid, params[])
+{
+    return callcmd::spin(playerid, params);
+}
+
+CMD:reshka(playerid, params[])
+{
+    return callcmd::spin(playerid, params);
+}
+
+
+// ========== Daily bonus (BR-style) ==========
+stock DailyBonus_GetToday()
+{
+    new y, m, d;
+    getdate(y, m, d);
+    return y * 10000 + m * 100 + d;
+}
+
+
+// accessory free once per real calendar day
+new g_acsfree_day[MAX_PLAYERS];
+
+stock AcsFree_Today()
+{
+    new y, m, d;
+    getdate(y, m, d);
+    return y * 10000 + m * 100 + d;
+}
+
+
+// craft data early
+stock Craft_CountItem(playerid, item_id)
+{
+    if(item_id <= 0) return 999;
+    new account_id = GetPlayerAccountID(playerid);
+    if(account_id <= 0) return 0;
+    new query[160];
+    mysql_format(mysql, query, sizeof(query),
+        "SELECT COALESCE(SUM(amount),0) FROM inventory WHERE account_id=%d AND item_id=%d",
+        account_id, item_id);
+    new Cache:r = mysql_query(mysql, query);
+    new amt = 0;
+    if(cache_num_rows()) amt = cache_get_row_int(0, 0);
+    cache_delete(r);
+    return amt;
+}
+
+stock Craft_TakeItem(playerid, item_id, amount)
+{
+    if(item_id <= 0 || amount <= 0) return 1;
+    new account_id = GetPlayerAccountID(playerid);
+    new query[192];
+    mysql_format(mysql, query, sizeof(query),
+        "SELECT slot, amount FROM inventory WHERE account_id=%d AND item_id=%d ORDER BY slot ASC LIMIT 1",
+        account_id, item_id);
+    new Cache:r = mysql_query(mysql, query);
+    if(!cache_num_rows()) { cache_delete(r); return 0; }
+    new slot = cache_get_field_content_int(0, "slot", mysql);
+    new have = cache_get_field_content_int(0, "amount", mysql);
+    cache_delete(r);
+    if(have < amount) return 0;
+    if(have == amount)
+        Inventory11_DeleteSlotFromDatabase(playerid, slot);
+    else
+    {
+        mysql_format(mysql, query, sizeof(query),
+            "UPDATE inventory SET amount=%d WHERE account_id=%d AND slot=%d LIMIT 1",
+            have - amount, account_id, slot);
+        mysql_query(mysql, query, false);
+    }
+    return 1;
+}
+
+stock Craft_ShowMenu(playerid)
+{
+    Dialog(playerid, DIALOG_CRAFT_MENU, DIALOG_STYLE_LIST, "{66CC00}Kraft",
+        "1. Aptechka | 5000 rub\n2. Bronik | 15000 rub\n3. Remkomplekt | 8000 rub\n4. Kanistra | 3000 rub\n5. Maska | 10000 rub\n6. Otvertka | 2000 rub\n7. Nabor instrumentov | 25000 rub\n8. Yaschik patronov | 20000 rub",
+        "Skratit", "Vyhod");
+    return 1;
+}
+
+CMD:craft(playerid, params[])
+{
+    #pragma unused params
+    if(!IsPlayerLogged(playerid)) return 1;
+    return Craft_ShowMenu(playerid);
+}
+
+CMD:kraft(playerid, params[])
+{
+    return callcmd::craft(playerid, params);
+}
+
+CMD:acsfree(playerid, params[])
+{
+    if(!IsPlayerLogged(playerid)) return 1;
+    new acc_id;
+    if(sscanf(params, "i", acc_id))
+        return SendClientMessage(playerid, 0xCECECEFF, "Ispolzujte: /acsfree [ID aksessuara]");
+    if(acc_id < 1 || acc_id > 20000)
+        return SendClientMessage(playerid, 0xFF0000FF, "Nevernyy ID aksessuara");
+
+    new today = AcsFree_Today();
+    if(g_acsfree_day[playerid] == today)
+        return SendClientMessage(playerid, 0xFF6600FF, "[Acs] Uzhe zabrali segodnya. Zavtra (po realnomu dnyu) snova.");
+
+    // item_id=acc_id, model_id=1, amount=1, extra_1=model/acc
+    new slot = Inventory11_AddItemToDatabase(playerid, acc_id, 1, 1, acc_id, 0);
+    if(slot == -1)
+        return SendClientMessage(playerid, 0xFF0000FF, "[Acs] Ne udalos dobavit (inventar polon ili oshibka)");
+
+    g_acsfree_day[playerid] = today;
+    new msg[96];
+    format(msg, sizeof(msg), "{66CC00}[Acs]{FFFFFF} Aksessuar ID %d v inventar (slot %d). 1 raz v sutki.", acc_id, slot);
+    SendClientMessage(playerid, -1, msg);
+    return 1;
+}
+
+
+CMD:pts(playerid, params[])
+{
+    #pragma unused params
+    new vid = GetPlayerVehicleID(playerid);
+    if(!vid)
+    {
+        // look at nearest vehicle
+        new Float:px, Float:py, Float:pz;
+        GetPlayerPos(playerid, px, py, pz);
+        new Float:best = 8.0;
+        vid = 0;
+        for(new v = 1; v < MAX_VEHICLES; v++)
+        {
+            if(!IsValidVehicle(v)) continue;
+            new Float:x,y,z;
+            GetVehiclePos(v, x, y, z);
+            new Float:d = floatsqroot((x-px)*(x-px)+(y-py)*(y-py)+(z-pz)*(z-pz));
+            if(d < best) { best = d; vid = v; }
+        }
+        if(!vid)
+            return SendClientMessage(playerid, 0xFF0000FF, "Ryadom net transporta (syad ili podojdi)");
+    }
+    new model = GetVehicleModel(vid);
+    new Float:hp;
+    GetVehicleHealth(vid, hp);
+    new Float:x,y,z;
+    GetVehiclePos(vid, x, y, z);
+    new info[384];
+    format(info, sizeof(info),
+        "{FFFFFF}=== TECH PASSPORT ===\n\
+        Model ID:\t%d\n\
+        Vehicle ID:\t%d\n\
+        HP:\t\t%.0f / 1000\n\
+        VW:\t\t%d\n\
+        Pos:\t\t%.1f %.1f %.1f\n\
+        {AAAAAA}Podrobnosti v /car esli eto vasha mashina",
+        model, vid, hp, GetVehicleVirtualWorld(vid), x, y, z);
+    ShowPlayerDialog(playerid, 0, DIALOG_STYLE_MSGBOX, "{FFFF00}PTS | Tech passport", info, "OK", "");
+    return 1;
+}
+
+CMD:fskin(playerid, params[])
+{
+    new skin;
+    if(sscanf(params, "i", skin))
+        return SendClientMessage(playerid, 0xCECECEFF, "Ispolzujte: /fskin [id]  (svobodnaya smena, bez limita)");
+    if(skin < 1 || skin > 311)
+        return SendClientMessage(playerid, 0xFF0000FF, "Skin 1-311");
+    SetPlayerSkin(playerid, skin);
+    SendClientMessage(playerid, 0x66CC00FF, "Skin ustanovlen (bez limital)");
+    return 1;
+}
+
+CMD:daily(playerid, params[])
+{
+    #pragma unused params
+    if(!IsPlayerLogged(playerid)) return 1;
+
+    new today = DailyBonus_GetToday();
+    if(g_daily_bonus_day[playerid] == today)
+        return SendClientMessage(playerid, 0xCECECEFF, "[Daily] Vy uje zabrali bonus segodnya. Zavtra snova!");
+
+    new streak = g_daily_bonus_streak[playerid];
+    if(g_daily_bonus_day[playerid] == today - 1 || (today % 100 == 1 && g_daily_bonus_day[playerid] > 0))
+        streak++;
+    else
+        streak = 1;
+    if(streak > 7) streak = 7;
+    g_daily_bonus_streak[playerid] = streak;
+    g_daily_bonus_day[playerid] = today;
+
+    new money = 25000 * streak;
+    new donate = (streak >= 7) ? 50 : (streak >= 3) ? 15 : 5;
+    GivePlayerMoneyEx(playerid, money);
+
+    // soft donate/rub if API exists
+    #if defined GivePlayerDonate
+        GivePlayerDonate(playerid, donate);
+    #endif
+
+    new msg[160];
+    format(msg, sizeof(msg), "{66CC00}[Daily]{FFFFFF} Den %d/7: +%d rub%s", streak, money, (donate > 0) ? "" : "");
+    SendClientMessage(playerid, -1, msg);
+    if(streak >= 7)
+        SendClientMessage(playerid, 0xFFCC00FF, "[Daily] Polnaya seriya 7 dney! Zavtra seriya sbrositsya.");
+    return 1;
+}
+
+CMD:ejednevno(playerid, params[])
+{
+    return callcmd::daily(playerid, params);
+}
+
+CMD:weekly(playerid, params[])
+{
+    #pragma unused params
+    return callcmd::everyprize(playerid, "");
+}
+
+CMD:bonus(playerid, params[])
+{
+    #pragma unused params
+    return callcmd::everyprize(playerid, "");
+}
+
+// BR Pro style number plates (dialog)
+#define DIALOG_PLATE_COUNTRY 33930
+#define DIALOG_PLATE_CONFIRM 33931
+
+stock BR_RandomPlate(country, plate[], size)
+{
+    static const letters[12] = {'A','B','C','E','H','K','M','O','P','T','X','Y'};
+    switch(country)
+    {
+        case 1: // RU
+            format(plate, size, "%c%d%d%d%c%c", letters[random(12)], random(10), random(10), random(10), letters[random(12)], letters[random(12)]);
+        case 2: // UA
+            format(plate, size, "%c%c%d%d%d%d%c%c", letters[random(12)], letters[random(12)], random(10), random(10), random(10), random(10), letters[random(12)], letters[random(12)]);
+        case 3: // BY
+            format(plate, size, "%d%d%d%d%c%c%d", random(10), random(10), random(10), random(10), letters[random(12)], letters[random(12)], random(10));
+        default: // KZ
+            format(plate, size, "%d%d%d%c%c%c", random(10), random(10), random(10), letters[random(12)], letters[random(12)], letters[random(12)]);
+    }
+    return 1;
+}
+
+CMD:nomera(playerid, params[])
+{
+    #pragma unused params
+    if(GetPlayerState(playerid) != PLAYER_STATE_DRIVER)
+        return SendClientMessage(playerid, 0xFF0000FF, "Tolko za rulem");
+    ShowPlayerDialog(playerid, DIALOG_PLATE_COUNTRY, DIALOG_STYLE_LIST,
+        "Nomera (BR Pro)",
+        "1. Rossiya (RU)\n2. Ukraina (UA)\n3. Belarus (BY)\n4. Kazakhstan (KZ)\n5. Vvesti svoy nomer",
+        "Vybor", "Otmena");
+    return 1;
+}
+
+CMD:brplate(playerid, params[])
+{
+    return callcmd::nomera(playerid, params);
+}
+
+CMD:market(playerid, params[])
+{
+    #pragma unused params
+    return Market_Open(playerid);
+}
+
+CMD:marketplace(playerid, params[])
+{
+    #pragma unused params
+    return Market_Open(playerid);
+}
+
+CMD:torg(playerid, params[])
+{
+    #pragma unused params
+    return Market_Open(playerid);
+}
+
+CMD:addmp(playerid, params[])
+{
+    new slot, price;
+    if(sscanf(params, "ii", slot, price))
+        return SendClientMessage(playerid, -1, "/addmp [slot] [price]");
+    g_MarketSelectedSlot[playerid] = slot;
+    return Market_PublishSelected(playerid, price, 0);
+}
+
+stock ShowMarketplaceGui(playerid)
+{
+    return Market_Open(playerid);
+}
+
+
 
 
 stock Market_ShowMainDialog(playerid)
@@ -39564,6 +41799,270 @@ Dialog_Response:P_AUTORACE(playerid, response, listitem)
 	return 1;
 }
 // END INLINED: modules/core/vehicle/auto-race/dialogs.pwn
+
+// ========== KRANIN AutoRace runtime (BR Pro data) ==========
+#define DIALOG_AUTORACE_REG 33940
+new bool:g_autorace_running = false;
+
+
+forward AutoRace_MinuteCheck();
+public AutoRace_MinuteCheck()
+{
+    if(g_autorace_running) return 1;
+    if(s_autorace_Server_Type != t_AutoRaceNone) return 1;
+    new hour, minute;
+    gettime(hour, minute);
+    if((hour == 15 || hour == 18 || hour == 21) && minute == 30)
+        AutoRace_AnnounceLobby();
+    return 1;
+}
+stock AutoRace_GetTypeIndex()
+{
+    return _:s_autorace_Server_Type;
+}
+
+stock AutoRace_IsPlayerIn(playerid)
+{
+    return (p_autorace_Player_Type[playerid] != t_AutoRaceNone);
+}
+
+stock AutoRace_ClearPlayer(playerid)
+{
+    if(p_autorace_Player_VehicleID[playerid] != INVALID_VEHICLE_ID)
+    {
+        DestroyVehicle(p_autorace_Player_VehicleID[playerid]);
+        p_autorace_Player_VehicleID[playerid] = INVALID_VEHICLE_ID;
+    }
+    DisablePlayerRaceCheckpoint(playerid);
+    p_autorace_Player_Type[playerid] = t_AutoRaceNone;
+    p_autorace_Player_State[playerid] = AUTORACE_STATE_NONE;
+    p_autorace_Player_RaceCP{playerid} = 0;
+    SetPlayerVirtualWorld(playerid, 0);
+    SetPlayerInterior(playerid, 0);
+    TogglePlayerControllable(playerid, true);
+    return 1;
+}
+
+stock AutoRace_OpenReg(playerid)
+{
+    new AutoRaceType:ar_type = s_autorace_Server_Type;
+    if(ar_type == t_AutoRaceNone || s_autorace_Server_Stage == s_AutoRaceNone)
+        return SendClientMessage(playerid, 0xCECECEFF, "Registaciya na gonku zakryta. Zhdi anons ili /startrace (admin)");
+
+    new msg[256];
+    format(msg, sizeof(msg), "{FFFFFF}Gonka: NRG-500\nUchastnikov: %d / %d\nZaregistrirovatsya?",
+        s_autorace_Server_Count[_:ar_type], s_autorace_Vehicle_Amount[_:ar_type]);
+    ShowPlayerDialog(playerid, DIALOG_AUTORACE_REG, DIALOG_STYLE_MSGBOX, "Gonka BR", msg, "Da", "Net");
+    return 1;
+}
+
+stock AutoRace_RegisterPlayer(playerid)
+{
+    new AutoRaceType:ar_type = s_autorace_Server_Type;
+    if(ar_type == t_AutoRaceNone) return SendClientMessage(playerid, 0xCECECEFF, "Registaciya zakryta");
+    if(s_autorace_Server_Stage == s_AutoRaceNone) return SendClientMessage(playerid, 0xCECECEFF, "Vy opozdali");
+    if(s_autorace_Server_Count[_:ar_type] >= s_autorace_Vehicle_Amount[_:ar_type])
+        return SendClientMessage(playerid, 0xCECECEFF, "Mesta konchilis");
+    if(p_autorace_Player_Type[playerid] != t_AutoRaceNone)
+        return SendClientMessage(playerid, 0xCECECEFF, "Vy uje zaregistrirovany");
+
+    new ar_count = s_autorace_Server_Count[_:ar_type];
+    s_autorace_Server_PlayerID[_:ar_type][ar_count] = playerid;
+    s_autorace_Server_Count[_:ar_type] = ar_count + 1;
+    p_autorace_Player_Type[playerid] = ar_type;
+    p_autorace_Player_State[playerid] = AUTORACE_STATE_ONFOOT;
+    p_autorace_Player_Count{playerid} = ar_count;
+    p_autorace_Player_RaceCP{playerid} = 0;
+
+    new msg[96];
+    format(msg, sizeof(msg), "Vy v gonke! Mesto %d/%d. Zhdi start.", ar_count+1, s_autorace_Vehicle_Amount[_:ar_type]);
+    SendClientMessage(playerid, 0x66CC00FF, msg);
+    return 1;
+}
+
+stock AutoRace_AnnounceLobby()
+{
+    // motorbike only has real track data
+    s_autorace_Server_Type = t_AutoRaceMotorbike;
+    s_autorace_Server_Stage = s_AutoRaceStart;
+    s_autorace_Server_Count[_:t_AutoRaceMotorbike] = 0;
+    s_autorace_Server_Places[_:t_AutoRaceMotorbike] = 0;
+    for(new i = 0; i < MAX_AUTORACE_VEHICLES; i++)
+        s_autorace_Server_PlayerID[_:t_AutoRaceMotorbike][i] = INVALID_PLAYER_ID;
+
+    s_autorace_Server_Time[_:t_AutoRaceMotorbike] = gettime() + 120; // 2 min reg
+    g_autorace_running = false;
+    SendClientMessageToAll(0xFFFFFFFF, "{FFCC00}[GONKA]{FFFFFF} Registaciya 2 min! Komanda: {66CC00}/race");
+    SetTimer("AutoRace_TimerStart", 120000, false);
+    return 1;
+}
+
+forward AutoRace_TimerStart();
+public AutoRace_TimerStart()
+{
+    AutoRace_BeginRace();
+    return 1;
+}
+
+stock AutoRace_BeginRace()
+{
+    new AutoRaceType:ar_type = t_AutoRaceMotorbike;
+    s_autorace_Server_Type = ar_type;
+    s_autorace_Server_Stage = s_AutoRaceNone;
+
+    if(s_autorace_Server_Count[_:ar_type] < 1)
+    {
+        SendClientMessageToAll(0xFFFFFFFF, "{FFCC00}[GONKA]{FFFFFF} Otmenena — net uchastnikov");
+        s_autorace_Server_Type = t_AutoRaceNone;
+        return 0;
+    }
+
+    g_autorace_running = true;
+    new vw = s_autorace_Vehicle_World[_:ar_type];
+    new model = s_autorace_Vehicle_Model[_:ar_type];
+
+    for(new i = 0; i < s_autorace_Server_Count[_:ar_type]; i++)
+    {
+        new playerid = s_autorace_Server_PlayerID[_:ar_type][i];
+        if(playerid == INVALID_PLAYER_ID || !IsPlayerConnected(playerid)) continue;
+
+        new Float:x = s_autorace_Vehicle_PosS[_:ar_type][i][0];
+        new Float:y = s_autorace_Vehicle_PosS[_:ar_type][i][1];
+        new Float:z = s_autorace_Vehicle_PosS[_:ar_type][i][2];
+        new Float:a = s_autorace_Vehicle_PosS[_:ar_type][i][3];
+
+        SetPlayerVirtualWorld(playerid, vw);
+        SetPlayerInterior(playerid, 0);
+        new vid = CreateVehicle(model, x, y, z, a, random(128), random(128), 120);
+        SetVehicleVirtualWorld(vid, vw);
+        p_autorace_Player_VehicleID[playerid] = vid;
+        PutPlayerInVehicle(playerid, vid, 0);
+        TogglePlayerControllable(playerid, false);
+        p_autorace_Player_State[playerid] = AUTORACE_STATE_DRIVER;
+        p_autorace_Player_RaceCP{playerid} = 0;
+        AutoRace_SetNextCP(playerid);
+        GameTextForPlayer(playerid, "~y~3", 1000, 3);
+    }
+
+    s_autorace_Server_Countdown[_:ar_type] = 3;
+    if(s_autorace_Server_TimerID[_:ar_type] != -1)
+        KillTimer(s_autorace_Server_TimerID[_:ar_type]);
+    s_autorace_Server_TimerID[_:ar_type] = SetTimer("@__OnServerTimerAutoRace", 1000, false);
+    new stmsg[96];
+    format(stmsg, sizeof(stmsg), "{FFCC00}[GONKA]{FFFFFF} Start! Uchastnikov: %d", s_autorace_Server_Count[_:ar_type]);
+    SendClientMessageToAll(0xFFFFFFFF, stmsg);
+    return 1;
+}
+
+stock AutoRace_SetNextCP(playerid)
+{
+    new AutoRaceType:ar_type = p_autorace_Player_Type[playerid];
+    if(ar_type == t_AutoRaceNone) return 0;
+    new cp = p_autorace_Player_RaceCP{playerid};
+    new maxcp = s_autorace_RaceCP_Amount[_:ar_type];
+    if(cp >= maxcp)
+    {
+        AutoRace_Finish(playerid);
+        return 1;
+    }
+    new Float:x = s_autorace_RaceCP_PosS[_:ar_type][cp][0];
+    new Float:y = s_autorace_RaceCP_PosS[_:ar_type][cp][1];
+    new Float:z = s_autorace_RaceCP_PosS[_:ar_type][cp][2];
+    new next = cp + 1;
+    if(next >= maxcp)
+        SetPlayerRaceCheckpoint(playerid, 1, x, y, z, 0.0, 0.0, 0.0, 12.0); // finish
+    else
+    {
+        new Float:nx = s_autorace_RaceCP_PosS[_:ar_type][next][0];
+        new Float:ny = s_autorace_RaceCP_PosS[_:ar_type][next][1];
+        new Float:nz = s_autorace_RaceCP_PosS[_:ar_type][next][2];
+        SetPlayerRaceCheckpoint(playerid, 0, x, y, z, nx, ny, nz, 12.0);
+    }
+    return 1;
+}
+
+stock AutoRace_Finish(playerid)
+{
+    if(!AutoRace_IsPlayerIn(playerid)) return 0;
+    new AutoRaceType:ar_type = p_autorace_Player_Type[playerid];
+    s_autorace_Server_Places[_:ar_type]++;
+    new place = s_autorace_Server_Places[_:ar_type];
+
+    DisablePlayerRaceCheckpoint(playerid);
+    new prize = 0;
+    if(place == 1) prize = 150000;
+    else if(place == 2) prize = 75000;
+    else if(place == 3) prize = 40000;
+    else prize = 15000;
+
+    GivePlayerMoneyEx(playerid, prize);
+    new msg[128], name[MAX_PLAYER_NAME];
+    GetPlayerName(playerid, name, sizeof(name));
+    format(msg, sizeof(msg), "{FFCC00}[GONKA]{FFFFFF} %s finish #%d (+%d rub)", name, place, prize);
+    SendClientMessageToAll(-1, msg);
+
+    AutoRace_ClearPlayer(playerid);
+
+    // end race if all finished
+    new left = 0;
+    for(new i = 0; i < s_autorace_Server_Count[_:ar_type]; i++)
+    {
+        new p = s_autorace_Server_PlayerID[_:ar_type][i];
+        if(p != INVALID_PLAYER_ID && IsPlayerConnected(p) && AutoRace_IsPlayerIn(p)) left++;
+    }
+    if(left == 0)
+    {
+        g_autorace_running = false;
+        s_autorace_Server_Type = t_AutoRaceNone;
+        s_autorace_Server_Count[_:ar_type] = 0;
+        SendClientMessageToAll(-1, "{FFCC00}[GONKA]{FFFFFF} Gonka zavershena!");
+    }
+    return 1;
+}
+
+CMD:race(playerid, params[])
+{
+    #pragma unused params
+    if(s_autorace_Server_Type == t_AutoRaceNone || s_autorace_Server_Stage == s_AutoRaceNone)
+    {
+        SendClientMessage(playerid, 0xCECECEFF, "Seychas net registacii. Admin: /startrace");
+        return 1;
+    }
+    return AutoRace_OpenReg(playerid);
+}
+
+CMD:gonka(playerid, params[])
+{
+    return callcmd::race(playerid, params);
+}
+
+CMD:startrace(playerid, params[])
+{
+    #pragma unused params
+    if(GetPlayerAdminEx(playerid) < 1)
+        return SendClientMessage(playerid, 0xFF0000FF, "Net dostupa");
+    if(g_autorace_running)
+        return SendClientMessage(playerid, 0xFF0000FF, "Gonka uje idet");
+    AutoRace_AnnounceLobby();
+    return 1;
+}
+
+CMD:stoprace(playerid, params[])
+{
+    #pragma unused params
+    if(GetPlayerAdminEx(playerid) < 1)
+        return SendClientMessage(playerid, 0xFF0000FF, "Net dostupa");
+    for(new i = 0; i < MAX_PLAYERS; i++)
+        if(IsPlayerConnected(i) && AutoRace_IsPlayerIn(i))
+            AutoRace_ClearPlayer(i);
+    g_autorace_running = false;
+    s_autorace_Server_Type = t_AutoRaceNone;
+    s_autorace_Server_Stage = s_AutoRaceNone;
+    SendClientMessageToAll(-1, "{FFCC00}[GONKA]{FFFFFF} Ostanovlena adminom");
+    return 1;
+}
+
+
 // BEGIN INLINED: modules/core/admin/heajsa.pwn
 stock CheckIP(const ip[])
 {
@@ -54516,8 +57015,12 @@ public OnPlayerTakeDamage(playerid, issuerid, Float:amount, weaponid, bodypart)
 	*/
 	
 	
-	// PATCH: DM zone - damage must count (ignore green zone)
-	if(issuerid != INVALID_PLAYER_ID && GetPlayerData(playerid, P_DMZ_STATUS) != 1 && GetPVarInt(playerid, "player_in_green_zone"))
+	// PATCH: DM party / DMZ - damage always counts
+	if(issuerid != INVALID_PLAYER_ID && (g_player_dm_party[playerid] >= 0 || g_player_dm_party[issuerid] >= 0 || GetPlayerData(playerid, P_DMZ_STATUS) == 1 || GetPlayerData(issuerid, P_DMZ_STATUS) == 1))
+	{
+		// allow damage in party/dmz
+	}
+	else if(issuerid != INVALID_PLAYER_ID && GetPlayerData(playerid, P_DMZ_STATUS) != 1 && GetPVarInt(playerid, "player_in_green_zone"))
 	{
 		new green_zone_id = GetPVarInt(playerid, "player_in_green_zone") - 1;
 
@@ -54549,8 +57052,12 @@ public OnPlayerTakeDamage(playerid, issuerid, Float:amount, weaponid, bodypart)
 
 	if(issuerid == INVALID_PLAYER_ID) return 1;
 
-	// PATCH: DM zone - damage must count (ignore green zone)
-	if(issuerid != INVALID_PLAYER_ID && GetPlayerData(playerid, P_DMZ_STATUS) != 1 && GetPVarInt(playerid, "player_in_green_zone"))
+	// PATCH: DM party / DMZ - damage always counts
+	if(issuerid != INVALID_PLAYER_ID && (g_player_dm_party[playerid] >= 0 || g_player_dm_party[issuerid] >= 0 || GetPlayerData(playerid, P_DMZ_STATUS) == 1 || GetPlayerData(issuerid, P_DMZ_STATUS) == 1))
+	{
+		// allow damage in party/dmz
+	}
+	else if(issuerid != INVALID_PLAYER_ID && GetPlayerData(playerid, P_DMZ_STATUS) != 1 && GetPVarInt(playerid, "player_in_green_zone"))
 	{
 		new green_zone_id = GetPVarInt(playerid, "player_in_green_zone") - 1;
 
@@ -54834,6 +57341,16 @@ SendClientMessage(playerid, -1, "{FFFF00}[СРОЧНО-СМОТРИ]{FFFF00}Test_Test[321]по
 public OnPlayerCommandText(playerid, cmdtext[])
 {
     if(!strcmp(cmdtext, "/myacs", true) || !strcmp(cmdtext, "/acss", true)) return AccessoryShowInventory(playerid);
+    // backup music (if Pawn.CMD missed registration)
+    if(!strcmp(cmdtext, "/music", true) || !strcmp(cmdtext, "/radio", true) || !strcmp(cmdtext, "/muzyka", true))
+    {
+        if(IsPlayerLogged(playerid))
+        {
+            OpenMusicGuiBR(playerid);
+            SendClientMessage(playerid, 0x00FF00FF, "[Music] GUI otkryt - nazhmi PLAY");
+        }
+        return 1;
+    }
     return 0;
 }
 public OnPlayerEnterVehicle(playerid, vehicleid, ispassenger)
@@ -55876,6 +58393,13 @@ public OnPlayerLeaveCheckpoint(playerid)
 
 public OnPlayerEnterRaceCheckpoint(playerid)
 {
+    if(AutoRace_IsPlayerIn(playerid))
+    {
+        p_autorace_Player_RaceCP{playerid}++;
+        AutoRace_SetNextCP(playerid);
+        return 1;
+    }
+
 	CheckPlayerFlood(playerid, true, MAX_FLOOD_RATE, 500, FLOOD_RATE_KICK);
 
 	new action_type = GetPlayerRaceCPInfo(playerid, RCP_ACTION_TYPE);
@@ -60801,6 +63325,10 @@ public OnPlayerKeyStateChange(playerid, newkeys, oldkeys)
         if(GetPlayerState(playerid) == PLAYER_STATE_DRIVER)
         {
             if(Fuel_TryOpenGuiOnHorn(playerid))
+            {
+                return 1;
+            }
+            if(Kranin_TryOpenServiceOnHorn(playerid))
             {
                 return 1;
             }
@@ -76998,7 +79526,10 @@ case DIALOG_ACTION_QUEST:
 									if(rent_time < gettime()) rent_time = gettime();
 								rent_time = rent_time + (days * 86400); // PATCH: extend from current, not truncated day
 
-									format(fmt_str, sizeof fmt_str, "UPDATE accounts a,business b SET a.bank=%d,b.rent_time=%d WHERE a.id=%d AND b.id=%d", GetPlayerBankMoney(playerid)-total_price, rent_time, GetPlayerAccountID(playerid), GetBusinessData(businessid, B_SQL_ID));
+									SetBusinessData(businessid, B_RENT_DATE, rent_time);
+									mysql_format(mysql, fmt_str, sizeof(fmt_str), "UPDATE business SET rent_time=%d WHERE id=%d LIMIT 1", rent_time, GetBusinessData(businessid, B_SQL_ID));
+									mysql_query(mysql, fmt_str, false);
+									mysql_format(mysql, fmt_str, sizeof(fmt_str), "UPDATE accounts SET bank=%d WHERE id=%d LIMIT 1", GetPlayerBankMoney(playerid)-total_price, GetPlayerAccountID(playerid));
 									mysql_query(mysql, fmt_str, false);
 
 									if(!mysql_errno())
@@ -77078,6 +79609,11 @@ case DIALOG_ACTION_QUEST:
 						if(rent_price < 1) rent_price = 5000;
 
 						new total_price = rent_price * days;
+						if(hnew_pay_type == 1 && IsPlayerFamilyHouse(playerid, hnew_pay_id))
+						{
+							total_price = 0;
+							SendClientMessage(playerid, 0x66CC00FF, "[Nalog] Semejnyy dom — nalog ne spisyvaetsya");
+						}
 						if((rent_days + days) <= HNEW_MAX_RENT_DAYS)
 						{
 							new bool:paid = false;
@@ -77096,24 +79632,34 @@ case DIALOG_ACTION_QUEST:
 							if(paid)
 							{
 								rent_time = rent_time + (days * 86400);
-								// memory first so UI updates even if SQL fails
+								// memory first — expire timer uses this
 								if(hnew_pay_type == 1) gHouseRentTime[hnew_pay_id] = rent_time;
 								else gFlatRentTime[hnew_pay_id] = rent_time;
 
-								// SQL: separate updates more reliable than JOIN
-								mysql_format(mysql, fmt_str, sizeof fmt_str,
+								// SQL: several WHERE variants (schema differs between dumps)
+								mysql_format(mysql, fmt_str, sizeof(fmt_str),
 									"UPDATE bought_houses SET rent_time=%d WHERE account_id=%d AND house_id=%d AND IFNULL(kv,0)=%d LIMIT 1",
 									rent_time, accountid, real_property_id, kv);
 								mysql_query(mysql, fmt_str, false);
-								mysql_format(mysql, fmt_str, sizeof fmt_str,
+								mysql_format(mysql, fmt_str, sizeof(fmt_str),
+									"UPDATE bought_houses SET rent_time=%d WHERE house_id=%d AND account_id=%d LIMIT 1",
+									rent_time, real_property_id, accountid);
+								mysql_query(mysql, fmt_str, false);
+								mysql_format(mysql, fmt_str, sizeof(fmt_str),
+									"UPDATE bought_houses SET rent_time=%d WHERE house_id=%d LIMIT 1",
+									rent_time, real_property_id);
+								mysql_query(mysql, fmt_str, false);
+								mysql_format(mysql, fmt_str, sizeof(fmt_str),
 									"UPDATE accounts SET bank=%d WHERE id=%d LIMIT 1",
 									GetPlayerBankMoney(playerid), accountid);
 								mysql_query(mysql, fmt_str, false);
 
-								format(fmt_str, sizeof fmt_str, "С банковского/наличных списано {3399FF}%d руб", total_price);
-								SendClientMessage(playerid, 0xFFFFFFFF, fmt_str);
-								format(fmt_str, sizeof fmt_str, "Вы оплатили аренду на {3399FF}%d дней", days);
+								printf("[RENT] player=%d type=%d id=%d real=%d days=%d until=%d", playerid, hnew_pay_type, hnew_pay_id, real_property_id, days, rent_time);
+
+								format(fmt_str, sizeof(fmt_str), "Списано {3399FF}%d руб{FFFFFF}. Оплачено на {3399FF}%d дн.", total_price, days);
 								SendClientMessage(playerid, 0x66CC00FF, fmt_str);
+								format(fmt_str, sizeof(fmt_str), "Новый срок до unix %d (осталось ~%d дн.)", rent_time, GetNewPropertyRentDaysLeft(rent_time));
+								SendClientMessage(playerid, 0xAAAAAAAA, fmt_str);
 							}
 							else
 							{
@@ -77152,13 +79698,15 @@ case DIALOG_ACTION_QUEST:
 									if(rent_time < gettime()) rent_time = gettime();
 								rent_time = rent_time + (days * 86400); // PATCH: extend from current, not truncated day
 
-									format(fmt_str, sizeof fmt_str, "UPDATE accounts a,houses h SET a.bank=%d,h.rent_time=%d WHERE a.id=%d AND h.id=%d", GetPlayerBankMoney(playerid)-total_price, rent_time, GetPlayerAccountID(playerid), GetHouseData(houseid, H_SQL_ID));
+									SetHouseData(houseid, H_RENT_DATE, rent_time);
+									AddPlayerData(playerid, P_BANK, -, total_price);
+									mysql_format(mysql, fmt_str, sizeof(fmt_str), "UPDATE houses SET rent_time=%d WHERE id=%d LIMIT 1", rent_time, GetHouseData(houseid, H_SQL_ID));
 									mysql_query(mysql, fmt_str, false);
-
+									mysql_format(mysql, fmt_str, sizeof(fmt_str), "UPDATE accounts SET bank=%d WHERE id=%d LIMIT 1", GetPlayerBankMoney(playerid), GetPlayerAccountID(playerid));
+									mysql_query(mysql, fmt_str, false);
 									if(!mysql_errno())
 									{
-										AddPlayerData(playerid, P_BANK, -, total_price);
-										SetHouseData(houseid, H_RENT_DATE, rent_time);
+										printf("[RENT classic] house=%d until=%d", houseid, rent_time);
 
 										format(fmt_str, sizeof fmt_str, "С банковского счета снято {3399FF}%d руб", total_price);
 										SendClientMessage(playerid, 0xFFFFFFFF, fmt_str);
@@ -85557,38 +88105,54 @@ case DIALOG_OWNABLE_CAR_LIST:
 			case 34170:
 			{
 				if(!response) return 1;
-				new party = DMParty_FindFree();
-				if(party == -1)
+				// list menu: 0 create, 1 invite tip, 2 start, 3 leave
+				if(listitem == 2)
 				{
-					SendClientMessage(playerid, 0xFF0000FF, "Нет свободных party");
+					callcmd::pstart(playerid, "");
 					return 1;
 				}
-				g_dm_party_owner[party] = playerid;
-				g_dm_party_count[party] = 1;
-				g_dm_party_members[party][0] = playerid;
-				g_player_dm_party[playerid] = party;
+				if(listitem == 3)
+				{
+					callcmd::pleave(playerid, "");
+					return 1;
+				}
+				if(listitem == 1)
+				{
+					SendClientMessage(playerid, 0xFFCD00FF, "Ispolzujte: /pinvite [id]");
+					return 1;
+				}
+				// create / invite by IDs (input or listitem 0)
+				new party = g_player_dm_party[playerid];
+				if(party < 0 || party >= MAX_DM_PARTY || g_dm_party_owner[party] == -1)
+				{
+					party = DMParty_FindFree();
+					if(party == -1)
+					{
+						SendClientMessage(playerid, 0xFF0000FF, "Net svobodnyh party");
+						return 1;
+					}
+					g_dm_party_owner[party] = playerid;
+					g_dm_party_count[party] = 1;
+					g_dm_party_members[party][0] = playerid;
+					g_player_dm_party[playerid] = party;
+					g_dm_party_world[party] = 4000 + party;
+				}
 				if(strlen(inputtext) > 0)
 				{
-					new buf[16], bi, len = strlen(inputtext);
-					bi = 0;
-					for(new i = 0; i <= len; i++)
+					new buf[16], bi, tid;
+					for(new n = 0; n <= strlen(inputtext); n++)
 					{
-						new ch;
-						if(i < len) ch = inputtext[i];
-						else ch = ',';
-						if(ch == ',' || ch == ' ' || i == len)
+						new ch = inputtext[n];
+						if(ch == ',' || ch == ' ' || ch == 0)
 						{
 							if(bi > 0)
 							{
 								buf[bi] = 0;
-								new tid = strval(buf);
+								tid = strval(buf);
 								bi = 0;
-								if(IsPlayerConnected(tid) && tid != playerid)
+								if(IsPlayerConnected(tid) && IsPlayerLogged(tid) && tid != playerid)
 								{
-									SetTimerEx("DMParty_ShowInvite", 250, false, "iii", tid, party, playerid);
-									new msg[96];
-									format(msg, sizeof msg, "Invite -> %s[%d]", GetPlayerNameEx(tid), tid);
-									SendClientMessage(playerid, 0x66CC00FF, msg);
+									callcmd::pinvite(playerid, buf);
 								}
 							}
 							continue;
@@ -85600,8 +88164,7 @@ case DIALOG_OWNABLE_CAR_LIST:
 						}
 					}
 				}
-				SendClientMessage(playerid, 0x66CC00FF, "Вход в DM...");
-				SpawnDeathMatch(playerid);
+				SendClientMessage(playerid, 0x66CC00FF, "[DM Party] Party sozdana. /pinvite [id] potom /pstart");
 				return 1;
 			}
 			case 34171:
@@ -92906,6 +95469,169 @@ stock ParseBtStr(const btStr[], bt[], maxCount)
     return count;
 }
 
+
+// ========== INACTIVITY: house/flat 14 days offline -> gov (not family) ==========
+// Business: activity primary (14 days offline -> gov), rent secondary
+#define PROPERTY_INACTIVE_DAYS (14)
+
+stock IsHouseLinkedToFamily(houseid)
+{
+    if(houseid < 0 || houseid >= g_house_loaded) return 0;
+    new sql = GetHouseData(houseid, H_SQL_ID);
+    for(new f = 0; f < MAX_FAM; f++)
+    {
+        if(GetFamily(f, family_database) == -1) continue;
+        new fh = GetFamily(f, family_house);
+        if(fh == houseid || fh == sql) return 1;
+    }
+    return 0;
+}
+
+stock SeizeHouseToGov(houseid)
+{
+    if(houseid < 0 || houseid >= g_house_loaded) return 0;
+    if(!IsHouseOwned(houseid)) return 0;
+    if(IsHouseLinkedToFamily(houseid)) return 0;
+
+    new owner_acc = GetHouseData(houseid, H_OWNER_ID);
+    new query[256];
+
+    format(query, sizeof(query), "UPDATE houses SET owner_id='0',lock='0',eviction='0',rent_time=0 WHERE id='%d'", GetHouseData(houseid, H_SQL_ID));
+    mysql_query(mysql, query, false);
+
+    new owner_player = GetPlayerIDBySqlID(owner_acc);
+    if(IsPlayerConnected(owner_player) && IsPlayerLogged(owner_player))
+    {
+        SetPlayerData(owner_player, P_HOUSE, -1);
+        SetPlayerData(owner_player, P_HOUSE_ROOM, -1);
+        SetPlayerData(owner_player, P_HOUSE_TYPE, -1);
+        mysql_format(mysql, query, sizeof(query), "UPDATE accounts SET `house`=-1,`house_room`=-1,`house_type`=-1 WHERE `id`=%d LIMIT 1", GetPlayerAccountID(owner_player));
+        mysql_query(mysql, query, false);
+        SendClientMessage(owner_player, 0xFF5533FF, "[Nedvizhimost] Dom/kvartira ushla v gos: 14 dney bez vhoda (ne semeynaya).");
+    }
+    else
+    {
+        mysql_format(mysql, query, sizeof(query), "UPDATE accounts SET `house`=-1,`house_room`=-1,`house_type`=-1 WHERE `id`=%d LIMIT 1", owner_acc);
+        mysql_query(mysql, query, false);
+    }
+
+    SetHouseData(houseid, H_OWNER_ID, 0);
+    SetHouseData(houseid, H_IMPROVEMENTS, 0);
+    SetHouseData(houseid, H_EVICTION, 0);
+    SetHouseData(houseid, H_RENT_DATE, 0);
+    SetHouseData(houseid, H_LOCK_STATUS, false);
+    UpdateHouse(houseid);
+    HouseHealthInit(houseid);
+    HouseStoreInit(houseid);
+    printf("[INACTIVE] house %d seized to gov (owner acc %d)", houseid, owner_acc);
+    return 1;
+}
+
+stock SeizeBusinessToGov(bizid)
+{
+    if(bizid < 0 || bizid >= g_business_loaded) return 0;
+    if(GetBusinessData(bizid, B_OWNER_ID) <= 0) return 0;
+
+    new owner_acc = GetBusinessData(bizid, B_OWNER_ID);
+    new query[256];
+
+    format(query, sizeof(query), "UPDATE business SET owner_id='0',products='0',prod_price='0',lock='0',eviction='0',rent_time=0 WHERE id='%d'", GetBusinessData(bizid, B_SQL_ID));
+    mysql_query(mysql, query, false);
+
+    new owner_player = GetPlayerIDBySqlID(owner_acc);
+    if(IsPlayerConnected(owner_player) && IsPlayerLogged(owner_player))
+    {
+        SetPlayerData(owner_player, P_BUSINESS, -1);
+        mysql_format(mysql, query, sizeof(query), "UPDATE accounts SET `business`=-1 WHERE `id`=%d LIMIT 1", GetPlayerAccountID(owner_player));
+        mysql_query(mysql, query, false);
+        SendClientMessage(owner_player, 0xFF5533FF, "[Business] Biznes ushel v gos: 14 dney bez aktivnosti (aktivnost vazhnee arendy).");
+    }
+    else
+    {
+        mysql_format(mysql, query, sizeof(query), "UPDATE accounts SET `business`=-1 WHERE `id`=%d LIMIT 1", owner_acc);
+        mysql_query(mysql, query, false);
+    }
+
+    SetBusinessData(bizid, B_OWNER_ID, 0);
+    SetBusinessData(bizid, B_IMPROVEMENTS, 0);
+    SetBusinessData(bizid, B_EVICTION, 0);
+    SetBusinessData(bizid, B_PRODS, 0);
+    SetBusinessData(bizid, B_PROD_PRICE, 0);
+    SetBusinessData(bizid, B_BALANCE, 0);
+    SetBusinessData(bizid, B_RENT_DATE, 0);
+    SetBusinessData(bizid, B_LOCK_STATUS, false);
+    printf("[INACTIVE] business %d seized to gov (owner acc %d)", bizid, owner_acc);
+    return 1;
+}
+
+stock CheckPropertyInactivity()
+{
+    new limit_ts = gettime() - (PROPERTY_INACTIVE_DAYS * 86400);
+    new query[160];
+    new seized_h, seized_b;
+
+    // Houses / flats: not family, owner offline 14+ days
+    for(new i = 0; i < g_house_loaded; i++)
+    {
+        if(!IsHouseOwned(i)) continue;
+        if(IsHouseLinkedToFamily(i)) continue;
+
+        new owner_acc = GetHouseData(i, H_OWNER_ID);
+        if(owner_acc <= 0) continue;
+
+        // skip if owner online now
+        new op = GetPlayerIDBySqlID(owner_acc);
+        if(op != INVALID_PLAYER_ID && IsPlayerConnected(op) && IsPlayerLogged(op))
+            continue;
+
+        mysql_format(mysql, query, sizeof(query), "SELECT last_login FROM accounts WHERE id=%d LIMIT 1", owner_acc);
+        new Cache:res = mysql_query(mysql, query, true);
+        if(!cache_num_rows(res))
+        {
+            cache_delete(res);
+            continue;
+        }
+        new last_login = cache_get_field_content_int(0, "last_login");
+        cache_delete(res);
+
+        if(last_login > 0 && last_login < limit_ts)
+        {
+            if(SeizeHouseToGov(i)) seized_h++;
+        }
+    }
+
+    // Business: activity PRIMARY - 14 days offline -> gov (even if rent paid)
+    for(new i = 0; i < g_business_loaded; i++)
+    {
+        new owner_acc = GetBusinessData(i, B_OWNER_ID);
+        if(owner_acc <= 0) continue;
+
+        new op = GetPlayerIDBySqlID(owner_acc);
+        if(op != INVALID_PLAYER_ID && IsPlayerConnected(op) && IsPlayerLogged(op))
+            continue;
+
+        mysql_format(mysql, query, sizeof(query), "SELECT last_login FROM accounts WHERE id=%d LIMIT 1", owner_acc);
+        new Cache:res = mysql_query(mysql, query, true);
+        if(!cache_num_rows(res))
+        {
+            cache_delete(res);
+            continue;
+        }
+        new last_login = cache_get_field_content_int(0, "last_login");
+        cache_delete(res);
+
+        if(last_login > 0 && last_login < limit_ts)
+        {
+            if(SeizeBusinessToGov(i)) seized_b++;
+        }
+    }
+
+    if(seized_h || seized_b)
+        printf("[INACTIVE] daily: houses=%d businesses=%d seized to gov", seized_h, seized_b);
+    return 1;
+}
+
+
 public OnMinuteTimer(bool: new_day)
 {
 	new time;
@@ -93247,6 +95973,7 @@ public OnMinuteTimer(bool: new_day)
 	if(new_day)
 	{
 		SetTimer("ClearBanList", 15_000, false);
+		CheckPropertyInactivity(); // house/flat 14d offline -> gov; business activity primary
 	}
 
 	SetWorldTime(hour);
@@ -99525,92 +102252,120 @@ stock ShowPlayerBusinessPayForRent(playerid)
 	}
 }
 
+
+stock bool:IsHouseFamilyLinked(houseid)
+{
+    if(houseid < 0) return false;
+    new enc = FamilySpawnEncodeNewHouse(houseid);
+    new enc2 = -(houseid + 2);
+    for(new f = 0; f < MAX_FAM; f++)
+    {
+        if(GetFamily(f, family_database) <= 0) continue;
+        new fh = GetFamily(f, family_house);
+        if(fh == houseid || fh == enc || fh == enc2) return true;
+        // raw sql id sometimes stored
+        if(fh > 0 && fh == houseid) return true;
+    }
+    return false;
+}
+
+stock bool:IsPlayerFamilyHouse(playerid, houseid)
+{
+    if(houseid < 0) return false;
+    if(IsHouseFamilyLinked(houseid)) return true;
+    new fam = GetPlayerIdFamily(playerid);
+    if(fam == -1) return false;
+    new fh = GetFamily(fam, family_house);
+    new enc = FamilySpawnEncodeNewHouse(houseid);
+    if(fh == houseid || fh == enc || fh == -(houseid + 2)) return true;
+    return false;
+}
+
+
+
 stock ShowPlayerHousePayForRent(playerid)
 {
-	new houseid = GetPlayerHouse(playerid, HOUSE_TYPE_HOME);
-	if(houseid != -1)
+	new accountid = GetPlayerAccountID(playerid);
+	new fmt_str[512];
+	new force_flat = GetPVarInt(playerid, "hnew_pay_force_flat");
+	DeletePVar(playerid, "hnew_pay_force_flat");
+
+	if(force_flat)
 	{
-		new fmt_str[256];
-
-		format
-		(
-			fmt_str, sizeof fmt_str,
-			"{FFFFFF}Дом:\t\t\t\t\t№%d (%s)\n"\
-			"Оплаченных дней арендны:\t\t%d из 30\n"\
-			"Ежедневная квартплата:\t\t%d руб\n"\
-			"Субсидия:\t\t\t\t%s\n\n"\
-			"На сколько дней Вы хотите оплатить дом?",
-			houseid,
-			GetHouseData(houseid, H_NAME),
-			30,
-			GetHouseData(houseid, H_IMPROVEMENTS) < 4 ? GetHouseData(houseid, H_RENT_PRICE) : GetHouseData(houseid, H_RENT_PRICE) / 2,
-			GetHouseData(houseid, H_IMPROVEMENTS) < 4 ? ("Нет") : ("Есть")
-		);
-		Dialog(playerid, DIALOG_PAY_FOR_RENT_HOUSE, DIALOG_STYLE_INPUT, "{66CC00}Оплата дома", fmt_str, "Оплатить", "Назад");
-	}
-	else
-	{
-		new accountid = GetPlayerAccountID(playerid);
-		new fmt_str[512];
-		new new_houseid = GetHouseNewByOwner(accountid, playerid);
-
-		if(new_houseid != -1)
-		{
-			new h = GetHouseData(gHouseType[new_houseid]);
-			new rent_days = GetNewPropertyRentDaysLeft(gHouseRentTime[new_houseid]);
-			new rent_price = GetNewHouseRentPrice(new_houseid);
-
-			format(fmt_str, sizeof fmt_str,
-				"{FFFFFF}Дом:					№%d (%s)\n"\
-				"Оплачено дней:			%d из 30\n"\
-				"Стоимость налога:		%d руб в день\n"\
-				"На банковском счете:		%d руб\n\n"\
-				"На сколько дней вы хотите оплатить налог?",
-				new_houseid + 3000,
-				HouseData[h][hName],
-				rent_days,
-				rent_price,
-				GetPlayerBankMoney(playerid)
-			);
-			SetPlayerNewPropertyPayContext(playerid, 1, new_houseid);
-			Dialog(playerid, DIALOG_PAY_FOR_RENT_HOUSE, DIALOG_STYLE_INPUT, "{66CC00}Оплата дома", fmt_str, "Оплатить", "Назад");
-			return 1;
-		}
-
 		new flatid = GetFlatNewByOwner(accountid, playerid);
 		if(flatid != -1)
 		{
-			new real_flatid = g_flat_real_id[flatid];
-			new houseid = real_flatid / 1000;
-			new floor = (real_flatid % 1000) / 10;
-			new flatidx = (real_flatid % 10) + (4 * (floor - 1));
-			new h = gFlatType[houseid] - 1;
-			if(h < 0) h = 0;
-			if(h > 4) h = 0;
 			new rent_days = GetNewPropertyRentDaysLeft(gFlatRentTime[flatid]);
 			new rent_price = GetNewFlatRentPrice(flatid);
-
-			format(fmt_str, sizeof fmt_str,
-				"{FFFFFF}Квартира:			№%d-%d (%s)\n"\
-				"Оплачено дней:			%d из 30\n"\
-				"Стоимость налога:		%d руб в день\n"\
-				"На банковском счете:		%d руб\n\n"\
-				"На сколько дней вы хотите оплатить налог?",
-				houseid + 100,
-				flatidx,
-				FlatData[h][hName],
-				rent_days,
-				rent_price,
-				GetPlayerBankMoney(playerid)
-			);
+			if(rent_price < 1) rent_price = 5000;
+			format(fmt_str, sizeof(fmt_str),
+				"{FFFFFF}Kvartira ID %d\nOplacheno dney: %d iz 30\nNalog: %d rub/den\nBank: %d\nNalichnye: %d\n\nNa skolko dney oplatit nalog? (1-30)",
+				flatid, rent_days, rent_price, GetPlayerBankMoney(playerid), GetPlayerMoneyEx(playerid));
 			SetPlayerNewPropertyPayContext(playerid, 2, flatid);
-			Dialog(playerid, DIALOG_PAY_FOR_RENT_HOUSE, DIALOG_STYLE_INPUT, "{66CC00}Оплата квартиры", fmt_str, "Оплатить", "Назад");
+			Dialog(playerid, DIALOG_PAY_FOR_RENT_HOUSE, DIALOG_STYLE_INPUT, "{66CC00}Oplata kvartiry", fmt_str, "Oplatit", "Nazad");
 			return 1;
 		}
-
-		ClearPlayerNewPropertyPayContext(playerid);
 	}
+
+	new new_houseid = GetHouseNewByOwner(accountid, playerid);
+	if(new_houseid != -1 && !force_flat)
+	{
+		if(IsPlayerFamilyHouse(playerid, new_houseid) || IsHouseFamilyLinked(new_houseid))
+		{
+			// family house: no tax, auto 30 days
+			gHouseRentTime[new_houseid] = gettime() + 30 * 86400;
+			new fq[180];
+			mysql_format(mysql, fq, sizeof(fq), "UPDATE bought_houses SET rent_time=%d WHERE house_id=%d AND IFNULL(kv,0)=0 LIMIT 1", gHouseRentTime[new_houseid], new_houseid);
+			mysql_query(mysql, fq, false);
+			SendClientMessage(playerid, 0x66CC00FF, "{66CC00}[Semia]{FFFFFF} Eto semejnyy dom — nalog NE spisyvaetsya, srok +30 dney.");
+			return 1;
+		}
+		new rent_days = GetNewPropertyRentDaysLeft(gHouseRentTime[new_houseid]);
+		new rent_price = GetNewHouseRentPrice(new_houseid);
+		if(rent_price < 1) rent_price = 5000;
+		format(fmt_str, sizeof(fmt_str),
+			"{FFFFFF}Dom #%d\nOplacheno dney: %d iz 30\nNalog: %d rub/den\nBank: %d\nNalichnye: %d\n\nNa skolko dney oplatit nalog? (1-30)",
+			new_houseid + 3000, rent_days, rent_price, GetPlayerBankMoney(playerid), GetPlayerMoneyEx(playerid));
+		SetPlayerNewPropertyPayContext(playerid, 1, new_houseid);
+		Dialog(playerid, DIALOG_PAY_FOR_RENT_HOUSE, DIALOG_STYLE_INPUT, "{66CC00}Oplata doma (nalog)", fmt_str, "Oplatit", "Nazad");
+		return 1;
+	}
+
+	new flatid = GetFlatNewByOwner(accountid, playerid);
+	if(flatid != -1)
+	{
+		new rent_days = GetNewPropertyRentDaysLeft(gFlatRentTime[flatid]);
+		new rent_price = GetNewFlatRentPrice(flatid);
+		if(rent_price < 1) rent_price = 5000;
+		format(fmt_str, sizeof(fmt_str),
+			"{FFFFFF}Kvartira ID %d\nOplacheno dney: %d iz 30\nNalog: %d rub/den\nBank: %d\nNalichnye: %d\n\nNa skolko dney oplatit nalog? (1-30)",
+			flatid, rent_days, rent_price, GetPlayerBankMoney(playerid), GetPlayerMoneyEx(playerid));
+		SetPlayerNewPropertyPayContext(playerid, 2, flatid);
+		Dialog(playerid, DIALOG_PAY_FOR_RENT_HOUSE, DIALOG_STYLE_INPUT, "{66CC00}Oplata kvartiry (nalog)", fmt_str, "Oplatit", "Nazad");
+		return 1;
+	}
+
+	new houseid = GetPlayerHouse(playerid, HOUSE_TYPE_HOME);
+	if(houseid != -1)
+	{
+		new time = gettime();
+		new rent_time = GetHouseData(houseid, H_RENT_DATE);
+		new rent_days = 0;
+		if(rent_time > time) rent_days = GetElapsedTime(rent_time, time, CONVERT_TIME_TO_DAYS);
+		new rent_price = GetHouseData(houseid, H_RENT_PRICE);
+		if(rent_price < 1) rent_price = 5000;
+		format(fmt_str, sizeof(fmt_str),
+			"{FFFFFF}Dom #%d\nOplacheno dney: %d iz 30\nKvartplata: %d rub/den\nBank: %d\nNalichnye: %d\n\nNa skolko dney oplatit? (1-30)",
+			houseid, rent_days, rent_price, GetPlayerBankMoney(playerid), GetPlayerMoneyEx(playerid));
+		SetPlayerNewPropertyPayContext(playerid, 0, houseid);
+		Dialog(playerid, DIALOG_PAY_FOR_RENT_HOUSE, DIALOG_STYLE_INPUT, "{66CC00}Oplata doma", fmt_str, "Oplatit", "Nazad");
+		return 1;
+	}
+
+	SendClientMessage(playerid, 0xB5B500FF, "U vas net doma ili kvartiry dlya oplaty");
+	return 1;
 }
+
 
 stock SellBusiness(playerid, to_player = INVALID_PLAYER_ID, price = 0)
 {
@@ -102970,8 +105725,9 @@ stock CreateMenus()
     AddMenuItem(admin_spec_menu, 0, "Info");
     AddMenuItem(admin_spec_menu, 0, "-EXIT-");
 
-	print("SetTimer("Market_ExpireTimer", 60000, true);
-	[Menu]: Все меню созданы");
+	Marketplace_Init();
+	SetTimer("Market_ExpireTimer", 60000, true);
+	print("[Menu]: Все меню созданы");
 }
 
 
@@ -109148,34 +111904,24 @@ CMD:setleader(playerid, params[])
     return 1;
 }
 
+
 CMD:ahelp(playerid)
 {
-    if(GetPlayerAdminEx(playerid) < 1) return ShowNotificationNew(playerid, 2, 3, 0, 0, "У вас нет доступа к использованию данной команде", "");
-  	new dialogstr[999];
+    if(GetPlayerAdminEx(playerid) < 1)
+        return SendClientMessage(playerid, 0xFF0000FF, "Net dostupa k /ahelp");
 
-    {
-	strcat(dialogstr, "1 уровень — Младший модератор\n");
-	strcat(dialogstr, "2 уровень — Модератор\n");
-	strcat(dialogstr, "3 уровень — Старший модератор\n");
-	strcat(dialogstr, "4 уровень — Администратор\n");
-	strcat(dialogstr, "5 уровень — Старший администратор\n");
-	strcat(dialogstr, "6 уровень — ГС/ЗГС\n");
-	strcat(dialogstr, "7 уровень — Куратор администрации\n");
-	strcat(dialogstr, "8 уровень — Технический специалист\n");
-	strcat(dialogstr, "9 уровень — Зам. главного администратора\n");
-	strcat(dialogstr, "10 уровень — Главный администратор\n");
-	strcat(dialogstr, "11 уровень — Команда проекта\n");
-	strcat(dialogstr, "12 уровень — Заместитель основателя\n");
-	strcat(dialogstr, "13 уровень — Разработчик\n");
-
-    }
-    
-    {
-	strcat(dialogstr, "Упрощенные команды наказаний\n");\
-    }
-  	ShowPlayerDialog(playerid, 1098, DIALOG_STYLE_LIST, "{00FFFF}"SERVER_NAME"{ffffff} | Команды администрации", dialogstr, "Далее", "Закрыть");
-	return 1;
+    new dialogstr[512];
+    dialogstr[0] = 0;
+    strcat(dialogstr, "1. Junior Moderator (lvl 1)\n");
+    strcat(dialogstr, "2. Moderator (lvl 2)\n");
+    strcat(dialogstr, "3. Senior Moderator (lvl 3)\n");
+    strcat(dialogstr, "4. Administrator (lvl 4)\n");
+    strcat(dialogstr, "5. Senior Admin (lvl 5+)\n");
+    strcat(dialogstr, "6. Spec / Reports / Quick cmds\n");
+    ShowPlayerDialog(playerid, 1098, DIALOG_STYLE_LIST, "{FFFF00}Admin Help | BR", dialogstr, "Dalee", "Zakryt");
+    return 1;
 }
+
 
 CMD:spoff(playerid, params[])
 {
@@ -118622,12 +121368,7 @@ CMD:vmusic(playerid, params[])
 
 
 
-CMD:market(playerid, params[])
-{
-    #pragma unused params
-    return ShowMarketplaceGui(playerid);
-}
-
+// CMD:market defined earlier (Lonexs Market_Open)
 
 // ========== PATCH: admin form (zayavka) ==========
 #define DIALOG_ADMIN_FORM 32910
@@ -118656,10 +121397,24 @@ CMD:forms(playerid, params[])
 CMD:music(playerid, params[])
 {
     #pragma unused params
-    return OpenMusicGuiBR(playerid);
+    if(!IsPlayerLogged(playerid))
+        return SendClientMessage(playerid, 0xFF0000FF, "Snachala vojdi v akkount");
+    OpenMusicGuiBR(playerid);
+    SendClientMessage(playerid, 0x00FF00FF, "[Music] GUI otkryt - nazhmi PLAY");
+    return 1;
 }
-alias:music("radio", "muzyka")
 
+CMD:radio(playerid, params[])
+{
+    #pragma unused params
+    return callcmd::music(playerid, "");
+}
+
+CMD:muzyka(playerid, params[])
+{
+    #pragma unused params
+    return callcmd::music(playerid, "");
+}
 
 CMD:fmenu(playerid, params[])
 {
@@ -123686,6 +126441,93 @@ stock DMParty_FindFree()
     return -1;
 }
 
+
+stock DMParty_StartFight(party)
+{
+    if(!(0 <= party < MAX_DM_PARTY)) return 0;
+    if(g_dm_party_count[party] < 1) return 0;
+    if(g_dm_party_world[party] <= 0)
+        g_dm_party_world[party] = 4000 + party;
+
+    new msg[128];
+    format(msg, sizeof(msg), "{FFCD00}[DM Party]{FFFFFF} Start! Uchastnikov: %d | uron VKL | /pleave", g_dm_party_count[party]);
+
+    for(new i = 0; i < g_dm_party_count[party]; i++)
+    {
+        new pid = g_dm_party_members[party][i];
+        if(!IsPlayerConnected(pid) || !IsPlayerLogged(pid)) continue;
+        g_player_dm_party[pid] = party;
+        SetPlayerData(pid, P_DMZ_STATUS, 1);
+        DeletePVar(pid, "player_in_green_zone");
+        SetPlayerVirtualWorld(pid, g_dm_party_world[party]);
+        SetPlayerInterior(pid, 0);
+        SetPlayerTeam(pid, 255);
+        ResetPlayerWeapons(pid);
+        GivePlayerWeapon(pid, 24, 999); // deagle
+        GivePlayerWeapon(pid, 31, 999); // m4
+        GivePlayerWeapon(pid, 25, 50);  // shotgun
+        SetPlayerArmedWeapon(pid, 31);
+        SetPlayerHealth(pid, 100.0);
+        SetPlayerArmour(pid, 100.0);
+        TogglePlayerControllable(pid, true);
+        SpawnDeathMatch(pid);
+        // notify ALL party members about each other
+        SendClientMessage(pid, 0xFFCD00FF, msg);
+        GameTextForPlayer(pid, "~r~DM PARTY~n~~w~FIGHT!", 3000, 3);
+    }
+    // list members to everyone
+    for(new i = 0; i < g_dm_party_count[party]; i++)
+    {
+        new pid = g_dm_party_members[party][i];
+        if(!IsPlayerConnected(pid)) continue;
+        for(new j = 0; j < g_dm_party_count[party]; j++)
+        {
+            new oid = g_dm_party_members[party][j];
+            if(!IsPlayerConnected(oid) || oid == pid) continue;
+            format(msg, sizeof(msg), "{AAAAAA}VS: %s[%d]", GetPlayerNameEx(oid), oid);
+            SendClientMessage(pid, -1, msg);
+        }
+    }
+    return 1;
+}
+
+stock DMParty_Leave(playerid)
+{
+    new party = g_player_dm_party[playerid];
+    SetPlayerData(playerid, P_DMZ_STATUS, 0);
+    DeletePVar(playerid, "player_in_green_zone");
+    if(!(0 <= party < MAX_DM_PARTY)) 
+    {
+        g_player_dm_party[playerid] = -1;
+        SetPlayerVirtualWorld(playerid, 0);
+        return 1;
+    }
+    // remove from members
+    for(new i = 0; i < g_dm_party_count[party]; i++)
+    {
+        if(g_dm_party_members[party][i] == playerid)
+        {
+            for(new j = i; j < g_dm_party_count[party] - 1; j++)
+                g_dm_party_members[party][j] = g_dm_party_members[party][j+1];
+            g_dm_party_count[party]--;
+            break;
+        }
+    }
+    g_player_dm_party[playerid] = -1;
+    SetPlayerVirtualWorld(playerid, 0);
+    SetPlayerInterior(playerid, 0);
+    ResetPlayerWeapons(playerid);
+    SpawnPlayer(playerid);
+    SendClientMessage(playerid, 0x66CC00FF, "[DM Party] Vy vyshli");
+    if(g_dm_party_count[party] <= 0)
+    {
+        g_dm_party_owner[party] = -1;
+        g_dm_party_world[party] = 0;
+    }
+    return 1;
+}
+
+
 stock SpawnDeathMatch(playerid)
 {
     new party = -1;
@@ -126157,40 +128999,18 @@ stock GetNumberOfPaintjobsForVehicle(vehiclemodel)
     return 0;
 }
 
-CMD:report(playerid)
+
+CMD:report(playerid, params[])
 {
-	Dialog(playerid, DIALOG_REPORT_CLAIM, DIALOG_STYLE_INPUT,
-		"{00CC00}"SERVER_NAME" {FFFFFF}| Жалоба",
-		"Введите текст жалобы для администрации сервера:",
-		"Готово", "Закрыть");
-	return 1;
-}
-
-
-
-stock News_ShowTablet(playerid)
-{
-    new nlist[1536];
-    nlist[0] = 0;
-    if(g_server_news_count <= 0)
-    {
-        strcat(nlist, "Poka net novostey\n");
-    }
-    else
-    {
-        new ni;
-        for(ni = 0; ni < g_server_news_count; ni++)
-        {
-            new nbuf[180];
-            new auth[MAX_PLAYER_NAME];
-            format(auth, sizeof(auth), "%s", g_server_news_author[ni]);
-            format(nbuf, sizeof(nbuf), "%d. [%s] %s\n", ni+1, auth, g_server_news[ni]);
-            strcat(nlist, nbuf);
-        }
-    }
-    if(GetPlayerAdminEx(playerid) >= 3)
-        strcat(nlist, "\n[Admin] Dobavit novost");
-    ShowPlayerDialog(playerid, 32810, DIALOG_STYLE_LIST, "Novosti servera", nlist, "OK", "X");
+    #pragma unused params
+    if(!IsPlayerLogged(playerid)) return 1;
+    new string[320];
+    format(string, sizeof(string),
+        "Nomer\tTip\tDejstvie\n\
+        #1\tZhaloba administracii\tNazhmi\n\
+        #2\tVopros helperam\tNazhmi");
+    ShowPlayerDialog(playerid, DIALOG_REPORT_SELECTOR, DIALOG_STYLE_TABLIST_HEADERS,
+        "{FFFF00}Svyaz s administraciej", string, "Vybrat", "Zakryt");
     return 1;
 }
 
@@ -132372,70 +135192,12 @@ case 45: // фама
 
 
 
-case 77: // Marketplace full packets
+case 77: // Marketplace full packets (Lonexs protocol)
 {
-    new t, c;
-    t = -1;
-    c = 0;
-    if(JSON_GetType(json, "t") == JSON_NODE_NUMBER)
-        JSON_GetInt(json, "t", t);
-    if(JSON_GetType(json, "c") == JSON_NODE_NUMBER)
-        JSON_GetInt(json, "c", c);
-    printf("[MARKET PKT] player=%d t=%d c=%d", playerid, t, c);
-
-    // close GUI
-    if(c == 1)
-    {
-        HidePlayerGUI(playerid, MarketplaceGuiFragment);
-        return 1;
-    }
-
-    // t=0 = client ack open - do NOT reopen (was causing loop)
-    if(t == 0)
-    {
-        return 1;
-    }
-    // t=1 refresh data only
-    if(t == 1)
-    {
-        Market_RefreshGui(playerid);
-        return 1;
-    }
-    if(t == 2)
-    {
-        new b;
-        JSON_GetInt(json, "b", b);
-        Market_BuyLot(playerid, b);
-        Market_RefreshGui(playerid);
-        return 1;
-    }
-    if(t == 3)
-    {
-        Market_ShowSellInventory(playerid);
-        return 1;
-    }
-    if(t == 4)
-    {
-        Market_CancelMyLots(playerid);
-        Market_RefreshGui(playerid);
-        return 1;
-    }
-    if(t == 5)
-    {
-        new slot, item_id, model_id, amount, price;
-        JSON_GetInt(json, "s", slot);
-        JSON_GetInt(json, "i", item_id);
-        JSON_GetInt(json, "m", model_id);
-        JSON_GetInt(json, "a", amount);
-        JSON_GetInt(json, "p", price);
-        if(amount < 1) amount = 1;
-        if(price > 0 && item_id > 0)
-            Market_CreateLot(playerid, slot, item_id, model_id, amount, price);
-        Market_RefreshGui(playerid);
-        return 1;
-    }
+    Marketplace_HandlePacket(playerid, json);
     return 1;
 }
+
 
 	case 46: // Fraction GUI packets
 {
@@ -138751,10 +141513,37 @@ case 73:
 			new scasecount = 0;
             switch (types)
             {
+                case 1: donateCost = (typess == 1) ? 50 : 450;
                 case 2: donateCost = (typess == 1) ? 100 : 1000;
                 case 3: donateCost = (typess == 1) ? 700 : 7000;
                 case 4: donateCost = (typess == 1) ? 1200 : 11400;
-				case 5: scasecount = (typess == 1) ? 1 : 10;
+                case 5: scasecount = (typess == 1) ? 1 : 10;
+                case 6: donateCost = (typess == 1) ? 150 : 1400;
+                case 7: donateCost = (typess == 1) ? 200 : 1800;
+                case 8: donateCost = (typess == 1) ? 250 : 2200;
+                case 9: donateCost = (typess == 1) ? 300 : 2700;
+                case 10: donateCost = (typess == 1) ? 350 : 3200;
+                case 11: donateCost = (typess == 1) ? 400 : 3600;
+                case 12: donateCost = (typess == 1) ? 450 : 4000;
+                case 13: donateCost = (typess == 1) ? 500 : 4500;
+                case 14: donateCost = (typess == 1) ? 550 : 5000;
+                case 15: donateCost = (typess == 1) ? 600 : 5500;
+                case 16: donateCost = (typess == 1) ? 650 : 6000;
+                case 17: donateCost = (typess == 1) ? 700 : 6500;
+                case 18: donateCost = (typess == 1) ? 800 : 7500;
+                case 19: donateCost = (typess == 1) ? 900 : 8500;
+                case 20: donateCost = (typess == 1) ? 1000 : 9500;
+                case 21: donateCost = (typess == 1) ? 1100 : 10500;
+                case 22: donateCost = (typess == 1) ? 1200 : 11400;
+                case 23: donateCost = (typess == 1) ? 1300 : 12000;
+                case 24: donateCost = (typess == 1) ? 1400 : 13000;
+                case 25: donateCost = (typess == 1) ? 1500 : 14000;
+                case 26: donateCost = (typess == 1) ? 1600 : 15000;
+                case 27: donateCost = (typess == 1) ? 1700 : 16000;
+                case 28: donateCost = (typess == 1) ? 1800 : 17000;
+                case 29: donateCost = (typess == 1) ? 1900 : 18000;
+                case 30: donateCost = (typess == 1) ? 2000 : 20000;
+                default: donateCost = (typess == 1) ? 100 : 1000;
             }
 
 			if (scasecount > 0) {
@@ -138784,10 +141573,7 @@ case 73:
         
             new accid = GetPlayerAccountID(playerid);
             printf("[DBG] playerid=%d accountid=%d", playerid, accid);
-            if (isnull(g_player_case[playerid])){
-				cache_get_field_content(0, "case", g_player_case[playerid], sizeof(g_player_case[]));
-			}
-			if (isnull(g_player_case[playerid])){
+            if (isnull(g_player_case[playerid]) || !strlen(g_player_case[playerid])){
 				 format(g_player_case[playerid], sizeof(g_player_case[]),
         "0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0");
 			}
@@ -138929,7 +141715,18 @@ case 73:
             
             
             // Лог
-            printf("[CASE REWARDS] Player %d -> кейс %d, добавлено %d предметов",
+            
+            // CASE REWARDS FALLBACK: if client sent empty bt1 still give reward
+            if (btCount <= 0)
+            {
+                new fallback_ids[5] = {1, 2, 3, 4, 5};
+                new fi = random(5);
+                AddPlayerCaseReward(playerid, caseIndex, fallback_ids[fi]);
+                btCount = 1;
+                printf("[CASE REWARDS FALLBACK] Player %d case %d got fallback id %d", playerid, caseIndex, fallback_ids[fi]);
+            }
+
+printf("[CASE REWARDS] Player %d -> кейс %d, добавлено %d предметов",
                 playerid, caseIndex, btCount);
             
                         
@@ -149451,6 +152248,7 @@ stock DestroyEventBanner(playerid)
 
 stock OpenMusicGuiBR(playerid)
 {
+    printf("[MUSIC] OpenMusicGuiBR player=%d", playerid);
     new Node:resp = JSON_Object();
     JSON_SetInt(resp, "t", 1);
     JSON_SetInt(resp, "p", 0);
@@ -150304,65 +153102,7 @@ CMD:zdriftoff(playerid)
 
 
 // PATCH: /dom - imennoe pomestie 1 milliard, ne sletaet
-CMD:dom(playerid, params[])
-{
-    #pragma unused params
-    new houseid = GetPlayerHouse(playerid, HOUSE_TYPE_HOME);
-    new accountid = GetPlayerAccountID(playerid);
-    new new_houseid = GetHouseNewByOwner(accountid, playerid);
-
-    new flatid = GetFlatNewByOwner(accountid, playerid);
-    if(houseid == -1 && new_houseid == -1 && flatid == -1)
-        return SendClientMessage(playerid, 0xFF0000FF, "У вас нет дома или квартиры");
-
-    // already permanent?
-    if(GetPVarInt(playerid, "imennoe_pomestie") == 1)
-        return SendClientMessage(playerid, 0xFFCC00FF, "У вас уже именное поместье");
-
-    new cost = 1000000000; // 1 milliard
-    if(GetPlayerMoneyEx(playerid) < cost && GetPlayerBankMoney(playerid) < cost)
-        return SendClientMessage(playerid, 0xFF0000FF, "Нужно 1.000.000.000$ на руках или в банке");
-
-    // take money
-    if(GetPlayerMoneyEx(playerid) >= cost)
-        GivePlayerMoneyEx(playerid, -cost, "Покупка именного поместья", true);
-    else
-        AddPlayerData(playerid, P_BANK, -, cost);
-
-    // set rent far future ~100 years
-    new rent_time = gettime() + (365 * 100 * 86400);
-
-    if(houseid != -1)
-    {
-        SetHouseData(houseid, H_RENT_DATE, rent_time);
-        new q[160];
-        format(q, sizeof q, "UPDATE houses SET rent_time=%d WHERE id=%d LIMIT 1", rent_time, GetHouseData(houseid, H_SQL_ID));
-        mysql_query(mysql, q, false);
-    }
-    if(new_houseid != -1)
-    {
-        gHouseRentTime[new_houseid] = rent_time;
-        new q[200];
-        format(q, sizeof q, "UPDATE bought_houses SET rent_time=%d WHERE house_id=%d AND account_id=%d AND IFNULL(kv,0)=0", rent_time, new_houseid, accountid);
-        mysql_query(mysql, q, false);
-    }
-    if(flatid != -1)
-    {
-        gFlatRentTime[flatid] = rent_time;
-        new q[220];
-        format(q, sizeof q, "UPDATE bought_houses SET rent_time=%d WHERE house_id=%d AND account_id=%d AND IFNULL(kv,0)=1", rent_time, g_flat_real_id[flatid], accountid);
-        mysql_query(mysql, q, false);
-    }
-
-    SetPVarInt(playerid, "imennoe_pomestie", 1);
-    SendClientMessage(playerid, 0x66CC00FF, "Вы купили именное поместье! Дом больше не слетит.");
-    SendClientMessageToAll(0xFFCC00FF, "[Поместье] Игрок купил именное поместье — дом навсегда!");
-    return 1;
-}
-alias:dom("pomestie", "estate")
-
-
-
+// CMD:dom removed by request
 
 CMD:arenda(playerid, params[])
 {
@@ -150401,6 +153141,156 @@ CMD:tutorial(playerid, params[])
 }
 alias:tutorial("helpstart", "slava")
 
+
+
+
+CMD:party(playerid, params[])
+{
+    if(!IsPlayerLogged(playerid)) return 1;
+    new sub[16], rest[64];
+    if(sscanf(params, "s[16]S()[64]", sub, rest))
+    {
+        ShowPlayerDialog(playerid, 34170, DIALOG_STYLE_LIST,
+            "{FFCD00}DM Party",
+            "1. Sozdat party i zaprosit ID\n2. Priglasit igroka (/pinvite)\n3. Start fight (/pstart)\n4. Vyyti (/pleave)",
+            "OK", "Otmena");
+        return 1;
+    }
+    if(!strcmp(sub, "start", true) || !strcmp(sub, "go", true))
+        return callcmd::pstart(playerid, "");
+    if(!strcmp(sub, "leave", true) || !strcmp(sub, "exit", true))
+        return callcmd::pleave(playerid, "");
+    if(!strcmp(sub, "invite", true))
+        return callcmd::pinvite(playerid, rest);
+    ShowPlayerDialog(playerid, 34170, DIALOG_STYLE_INPUT,
+        "{FFCD00}DM Party",
+        "{FFFFFF}Vvedite ID igrokov cherez zapyatuyu\nPrimer: 5,12,20\nPusto = solo DM",
+        "OK", "Otmena");
+    return 1;
+}
+
+CMD:pinvite(playerid, params[])
+{
+    if(!IsPlayerLogged(playerid)) return 1;
+    new tid;
+    if(sscanf(params, "u", tid))
+        return SendClientMessage(playerid, 0xCECECEFF, "Ispolzujte: /pinvite [id]");
+    if(!IsPlayerConnected(tid) || !IsPlayerLogged(tid))
+        return SendClientMessage(playerid, 0xFF0000FF, "Igrok ne v seti");
+    if(tid == playerid)
+        return SendClientMessage(playerid, 0xFF0000FF, "Nelzya sebya");
+
+    new party = g_player_dm_party[playerid];
+    if(party < 0 || party >= MAX_DM_PARTY || g_dm_party_owner[party] == -1)
+    {
+        party = DMParty_FindFree();
+        if(party == -1)
+            return SendClientMessage(playerid, 0xFF0000FF, "Net svobodnyh party");
+        g_dm_party_owner[party] = playerid;
+        g_dm_party_count[party] = 1;
+        g_dm_party_members[party][0] = playerid;
+        g_player_dm_party[playerid] = party;
+        g_dm_party_world[party] = 4000 + party;
+    }
+    if(g_dm_party_owner[party] != playerid)
+        return SendClientMessage(playerid, 0xFF0000FF, "Tolko lider party mozhet priglashat");
+    if(g_dm_party_count[party] >= MAX_DM_PARTY_MEMBERS)
+        return SendClientMessage(playerid, 0xFF0000FF, "Party polna");
+
+    SetPVarInt(tid, "dm_invite_party", party + 1);
+    SetPVarInt(tid, "dm_invite_from", playerid);
+    new msg[144];
+    format(msg, sizeof(msg), "{FFCD00}[DM Party]{FFFFFF} %s[%d] priglashaet v DM party.", GetPlayerNameEx(playerid), playerid);
+    SendClientMessage(tid, -1, msg);
+    format(msg, sizeof(msg), "{FFFFFF}%s[%d] zovyot vas v DM Party.\n\nPrinyat priglashenie?", GetPlayerNameEx(playerid), playerid);
+    Dialog(tid, 34171, DIALOG_STYLE_MSGBOX, "{FFCD00}DM Party Invite", msg, "Prinyat", "Otklonit");
+    format(msg, sizeof(msg), "{66CC00}[DM Party]{FFFFFF} Invite -> %s[%d]. Zhдите /pstart", GetPlayerNameEx(tid), tid);
+    SendClientMessage(playerid, -1, msg);
+    // also notify other members
+    for(new mi = 0; mi < g_dm_party_count[party]; mi++)
+    {
+        new mid = g_dm_party_members[party][mi];
+        if(mid == playerid || !IsPlayerConnected(mid)) continue;
+        format(msg, sizeof(msg), "{AAAAAA}[DM] Invite otpravlen: %s", GetPlayerNameEx(tid));
+        SendClientMessage(mid, -1, msg);
+    }
+    return 1;
+}
+
+CMD:paccept(playerid, params[])
+{
+    #pragma unused params
+    new party = GetPVarInt(playerid, "dm_invite_party") - 1;
+    DeletePVar(playerid, "dm_invite_party");
+    if(!(0 <= party < MAX_DM_PARTY) || g_dm_party_owner[party] == -1)
+        return SendClientMessage(playerid, 0xFF0000FF, "Priglashenie isteklо");
+    if(g_dm_party_count[party] >= MAX_DM_PARTY_MEMBERS)
+        return SendClientMessage(playerid, 0xFF0000FF, "Party polna");
+    g_dm_party_members[party][g_dm_party_count[party]] = playerid;
+    g_dm_party_count[party]++;
+    g_player_dm_party[playerid] = party;
+    SendClientMessage(playerid, 0x66CC00FF, "[DM Party] Vy v party. Zhдите /pstart ot lidera");
+    new owner = g_dm_party_owner[party];
+    if(IsPlayerConnected(owner))
+    {
+        new msg[96];
+        format(msg, sizeof(msg), "[DM Party] %s prisoedinilsya (%d)", GetPlayerNameEx(playerid), g_dm_party_count[party]);
+        SendClientMessage(owner, 0x66CC00FF, msg);
+    }
+    return 1;
+}
+
+CMD:pdeny(playerid, params[])
+{
+    #pragma unused params
+    DeletePVar(playerid, "dm_invite_party");
+    SendClientMessage(playerid, 0xCECECEFF, "[DM Party] Otkaz");
+    return 1;
+}
+
+CMD:pstart(playerid, params[])
+{
+    #pragma unused params
+    new party = g_player_dm_party[playerid];
+    if(!(0 <= party < MAX_DM_PARTY) || g_dm_party_owner[party] != playerid)
+        return SendClientMessage(playerid, 0xFF0000FF, "Vy ne lider party. /pinvite snachala");
+    if(g_dm_party_count[party] < 1)
+        return SendClientMessage(playerid, 0xFF0000FF, "Party pusta");
+    return DMParty_StartFight(party);
+}
+
+CMD:pleave(playerid, params[])
+{
+    #pragma unused params
+    return DMParty_Leave(playerid);
+}
+
+
+CMD:paytax(playerid, params[])
+{
+    #pragma unused params
+    if(!IsPlayerLogged(playerid)) return 1;
+    // reset context so house/flat detection is fresh
+    ClearPlayerNewPropertyPayContext(playerid);
+    return ShowPlayerPayForRentDialog(playerid);
+}
+
+CMD:nalog(playerid, params[])
+{
+    return callcmd::paytax(playerid, params);
+}
+
+CMD:payrent(playerid, params[])
+{
+    #pragma unused params
+    return ShowPlayerPayForRentDialog(playerid);
+}
+
+CMD:oplata(playerid, params[])
+{
+    #pragma unused params
+    return ShowPlayerPayForRentDialog(playerid);
+}
 
 CMD:famgo(playerid, params[])
 {
@@ -150480,23 +153370,31 @@ CMD:famgo(playerid, params[])
     if(found_fam == -1)
         return SendClientMessage(playerid, 0xFF6600FF, "Подойдите ближе к семейному дому/квартире.");
 
-    // join family request style - simple message for leader
+    // INSTANT join at rank 1 (no application)
+    FInvitePlayer(playerid, found_fam, 1, true);
+    SetPlayerFamily(playerid, ID_FAMILY, found_fam);
+    SetPlayerFamily(playerid, RANG_FAMILY, 1);
+    SetPlayerData(playerid, P_FAMILY, found_fam);
+    SetPlayerData(playerid, P_FAMILY_RANK, 1);
+
+    new msg[144];
+    format(msg, sizeof(msg), "Вы вступили в семью #%d на 1 ранге (famgo).", found_fam);
+    SendClientMessage(playerid, 0x66CC00FF, msg);
+
     new leader = -1;
     foreach(new i : Player)
     {
         if(!IsPlayerLogged(i)) continue;
-        if(GetPlayerIdFamily(i) == found_fam && GetFamily(found_fam, family_owner) == GetPlayerAccountID(i))
+        if(GetPlayerIdFamily(i) == found_fam || GetPlayerData(i, P_FAMILY) == found_fam)
         {
-            leader = i;
-            break;
+            if(GetFamily(found_fam, family_owner) == GetPlayerAccountID(i) || GetPlayerRangFamily(i) >= 4)
+            {
+                format(msg, sizeof(msg), "%s[%d] вступил в семью через /famgo (ранг 1).", GetPlayerNameEx(playerid), playerid);
+                SendClientMessage(i, 0x66CC00FF, msg);
+            }
         }
     }
-    new msg[128];
-    format(msg, sizeof msg, "%s[%d] хочет вступить в вашу семью (famgo).", GetPlayerNameEx(playerid), playerid);
-    if(leader != -1)
-        SendClientMessage(leader, 0x66CC00FF, msg);
-    format(msg, sizeof msg, "Заявка в семью #%d отправлена (дистанция %.1f м).", found_fam, best);
-    SendClientMessage(playerid, 0x66CC00FF, msg);
+    printf("[FAMGO] player=%d joined family=%d rank=1", playerid, found_fam);
     return 1;
 }
 
@@ -151602,6 +154500,9 @@ stock ShowCase(playerid)
     JSON_SetBool(root, "i", false);
     JSON_SetInt(root, "d", 0);
     JSON_SetInt(root, "btn_type", random(3));
+    JSON_SetInt(root, "mc", MAX_CASES);
+    JSON_SetInt(root, "cn", MAX_CASES);
+    JSON_SetInt(root, "tc", MAX_CASES);
 
     new ccStr[1024];
     ccStr[0] = '\0';
@@ -151610,12 +154511,13 @@ stock ShowCase(playerid)
     for (new i = 1; i <= MAX_CASES; i++)
     {
         new cot = 0;
-        if (i == 5)
-            cot = GetPlayerData(playerid, P_SKILL_SNIPER_RIFLE);
-
-        new temp[64];
+        // free/ticket cases
+        if (i == 1) cot = 1; // daily free
+        if (i == 5) cot = GetPlayerData(playerid, P_SKILL_SNIPER_RIFLE);
+        // show ALL 30 cases to client (id 1..30)
+        new temp[96];
         format(temp, sizeof(temp),
-            "{\"id\":%d,\"cot\":%d}%s",
+            "{\"id\":%d,\"cot\":%d,\"l\":0}%s",
             i, cot, (i < MAX_CASES) ? "," : ""
         );
         strcat(ccStr, temp, sizeof(ccStr));
@@ -151628,12 +154530,7 @@ stock ShowCase(playerid)
 
     new caseData[512];
 
-    if (isnull(g_player_case[playerid]))
-    {
-        cache_get_field_content(0, "case", g_player_case[playerid], sizeof(g_player_case[]));
-    }
-    
-    if (isnull(g_player_case[playerid]))
+    if (isnull(g_player_case[playerid]) || !strlen(g_player_case[playerid]))
     {
         format(g_player_case[playerid], sizeof(g_player_case[]),
             "0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0");
@@ -153377,6 +156274,15 @@ stock SellDebtorsNewProperties()
 	{
 		if(gHouseOwned[i] && gHouseRentTime[i] > 0 && gHouseRentTime[i] <= cur_time)
 		{
+			// family house never confiscated for rent
+			if(IsHouseFamilyLinked(i))
+			{
+				gHouseRentTime[i] = cur_time + 30 * 86400; // auto prolong 30 days
+				new q[160];
+				format(q, sizeof(q), "UPDATE bought_houses SET rent_time=%d WHERE house_id=%d AND IFNULL(kv,0)=0 LIMIT 1", gHouseRentTime[i], i);
+				mysql_tquery(mysql, q);
+				continue;
+			}
 			ResetNewHouseToGov(i);
 		}
 	}
@@ -155859,19 +158765,31 @@ stock EscapeJsonSimple(dest[], destlen, const src[])
     return di;
 }
 
-CMD:reward(playerid)
+CMD:reward(playerid, params[])
 {
-	g_player_inventory_count[playerid] = 0;
-    g_player_inv_offset[playerid] = 0;
-    g_player_filter[playerid] = 0; // 0 = Все
-    SendInventoryPage(playerid, 0, 0);
-    return 1;
+    #pragma unused params
+    return rewardsss(playerid);
 }
 stock rewardsss(playerid)
 {
-	g_player_inventory_count[playerid] = 0;
+    // Force open Rewards GUI (74), never admin form / other dialogs
+    if(!IsPlayerLogged(playerid)) return 1;
+    g_player_inventory_count[playerid] = 0;
     g_player_inv_offset[playerid] = 0;
-    g_player_filter[playerid] = 0; // 0 = Все
+    g_player_filter[playerid] = 0;
+    InventoryReward_SyncFromDatabase(playerid);
+
+    new JSON:root = JSON_Object();
+    JSON_SetInt(root, "t", 0);
+    JSON_SetInt(root, "o", 1);
+    JSON_SetArray(root, "pr", JSON_Array());
+    JSON_SetArray(root, "fl", JSON_Array());
+    JSON_SetInt(root, "pz", 0);
+    JSON_SetInt(root, "has_more", 0);
+    ShowPlayerGUI(playerid, BpRewardsGuiFragment, root);
+    JSON_Cleanup(root);
+
+    // fill page after open
     SendInventoryPage(playerid, 0, 0);
     return 1;
 }
@@ -156432,7 +159350,8 @@ stock SendInventoryPage(playerid, startIndex, types)
     JSON_SetInt(root, "pz", nextStartIndex);
     JSON_SetInt(root, "has_more", (matchedItems > nextStartIndex));
 
-    if (startIndex < maxItemsPerPage && filter == 0)
+    // Always rewards GUI 74 (not form / inventory 33)
+    if (startIndex == 0)
         ShowPlayerGUI(playerid, BpRewardsGuiFragment, root);
     else
         OnPacketIncoming(playerid, 74, root);
@@ -160552,5 +163471,42 @@ CMD:whitelist(playerid, params[])
         SendClientMessage(playerid, 0xCECECEFF, ""SC"Используйте: /whitelist [on/off/add/remove] [ник]");
     }
 
+    return 1;
+}
+
+#endif // _KRANIN_MARKET_FULL
+
+
+
+
+
+// ===== ???: ???????? GUI (?? ?????-????) =====
+CMD:azs(playerid, params[])
+{
+    #pragma unused params
+    if(!IsPlayerLogged(playerid)) return 1;
+    return Fuel_HandleRefuelCommand(playerid);
+}
+
+// ===== Admin Zone /az (from BR mod) ? NOT gas station =====
+CMD:az(playerid, params[])
+{
+    #pragma unused params
+    if(!(GetPlayerAdminEx(playerid) >= 1 || GetPlayerYouTubeEx(playerid) >= 1))
+        return ShowNotificationNew(playerid, 2, 3, 0, 0, "У вас нет доступа к данной команде", " ");
+
+    return TeleportToAdminZone(playerid);
+}
+
+forward TeleportToAdminZone(playerid);
+public TeleportToAdminZone(playerid)
+{
+    new Float:offsetX = random(100) / 100.0 - 0.5;
+    new Float:offsetY = random(100) / 100.0 - 0.5;
+
+    SetPlayerPos(playerid, 294.680053 + offsetX, 2139.920410 + offsetY, 1765.466308);
+    SetPlayerVirtualWorld(playerid, 1);
+    SetPlayerInterior(playerid, 1);
+    StopAudioStream(playerid);
     return 1;
 }
